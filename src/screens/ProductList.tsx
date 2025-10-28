@@ -63,6 +63,16 @@ function daysTo(dateIso?: string | null) {
   return Math.round((+b - +a) / 86400000);
 }
 
+/** Colores para el pill de vencimiento (sin dependencias) **/
+type ExpiryColors = { bg: string; border: string };
+function expiryColors(n: number): ExpiryColors {
+  if (n < 0)  return { bg: 'rgba(255,0,0,0.18)',    border: 'rgba(255,0,0,0.35)'    }; // vencido
+  if (n === 0) return { bg: 'rgba(255,165,0,0.22)', border: 'rgba(255,165,0,0.45)' }; // hoy
+  if (n <= 7)  return { bg: 'rgba(255,215,0,0.18)', border: 'rgba(255,215,0,0.35)' }; // < 1 semana
+  return { bg: 'rgba(16,185,129,0.20)', border: 'rgba(16,185,129,0.45)' };            // ok
+}
+
+// (Opcional / no usada ahora) helper de badge completa
 function badgeFor(days: number | null) {
   if (days == null) {
     return { label: 'Sin vencimiento', bg: 'rgba(255,255,255,0.08)', border: 'rgba(255,255,255,0.18)', accent: 'rgba(255,255,255,0.12)' };
@@ -658,64 +668,58 @@ export default function ProductList({ navigation }: Props) {
   const renderItem = ({ item }: { item: any }) => {
     if (item.__skeleton) return <SkeletonCard />;
 
-    const d: number | null = typeof item.daysToExpiry === 'number'
-      ? item.daysToExpiry
-      : daysTo(item.nextExpiry ?? null);
+    const d: number | null =
+      typeof item.daysToExpiry === 'number' ? item.daysToExpiry : null;
 
-    const badge = badgeFor(d);
+    const expLabel =
+      d == null ? null :
+      d < 0 ? `Vencido ${Math.abs(d)}d` :
+      d === 0 ? 'Vence hoy' :
+      `Vence en ${d}d`;
+
+    // Fallback neutro cuando no hay d
+    const expColors: ExpiryColors = d == null
+      ? { bg: 'rgba(255,255,255,0.06)', border: 'rgba(255,255,255,0.22)' }
+      : expiryColors(d);
 
     return (
-      <Pressable onLongPress={() => confirmDelete(item.id)} delayLongPress={300}>
-        <View
-          style={[
-            styles.card,
-            { borderLeftWidth: 3, borderLeftColor: badge.accent },
-          ]}
-        >
-          <View style={styles.row}>
-            {item.photoUrl ? (
-              <Image source={{ uri: item.photoUrl }} style={styles.thumb} />
-            ) : (
-              <View style={[styles.thumb, styles.thumbEmpty]} />
-            )}
-            <View style={{ width: 12 }} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.name}>{item.name}</Text>
-              <Text style={styles.meta}>
-                {[item.brand, item.category, item.sku].filter(Boolean).join(' · ') || '—'}
-              </Text>
+      <View style={styles.card}>
+        <View style={styles.row}>
+          {item.photoUrl ? (
+            <Image source={{ uri: item.photoUrl }} style={styles.thumb} />
+          ) : (
+            <View style={[styles.thumb, styles.thumbEmpty]} />
+          )}
+          <View style={{ width: 12 }} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.name}>{item.name}</Text>
+            <Text style={styles.meta}>
+              {[item.brand, item.category, item.sku].filter(Boolean).join(' · ') || '—'}
+            </Text>
 
+            {expLabel && (
               <View
                 style={[
                   styles.expiryPill,
-                { backgroundColor: badge.bg, borderColor: badge.border },
+                  { backgroundColor: expColors.bg, borderColor: expColors.border },
                 ]}
               >
-                <Text style={styles.expiryPillText}>{badge.label}</Text>
+                <Text style={styles.expiryPillText}>{expLabel}</Text>
               </View>
-            </View>
+            )}
+          </View>
 
-            <View style={styles.qtyControls}>
-              <TouchableOpacity style={styles.qtyBtn} onPress={() => onDelta(item.id, -1)}>
-                <Text style={styles.qtyBtnText}>−</Text>
-              </TouchableOpacity>
-              <Text style={[styles.qty, { marginHorizontal: 8 }]}>{item.qty ?? 0}</Text>
-              <TouchableOpacity style={styles.qtyBtn} onPress={() => onDelta(item.id, +1)}>
-                <Text style={styles.qtyBtnText}>＋</Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Botón de opciones (editar) */}
-            <TouchableOpacity
-              accessibilityLabel="Editar producto"
-              onPress={() => openEdit(item)}
-              style={styles.moreBtn}
-            >
-              <Text style={styles.moreBtnText}>⋮</Text>
+          <View style={styles.qtyControls}>
+            <TouchableOpacity style={styles.qtyBtn} onPress={() => onDelta(item.id, -1)}>
+              <Text style={styles.qtyBtnText}>−</Text>
+            </TouchableOpacity>
+            <Text style={[styles.qty, { marginHorizontal: 8 }]}>{item.qty ?? 0}</Text>
+            <TouchableOpacity style={styles.qtyBtn} onPress={() => onDelta(item.id, +1)}>
+              <Text style={styles.qtyBtnText}>＋</Text>
             </TouchableOpacity>
           </View>
         </View>
-      </Pressable>
+      </View>
     );
   };
 
@@ -1133,3 +1137,5 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
   },
 });
+
+export {};
