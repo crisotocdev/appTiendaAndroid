@@ -1,0 +1,36 @@
+# Node / Expo / RN
+node_modules/
+.expo/
+.expo-shared/
+dist/
+build/
+web-build/
+*.log
+npm-debug.log*
+yarn-error.log*
+package-lock.json
+pnpm-lock.yaml
+
+# IDEs/OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# RN específicos
+android/
+ios/
+
+# Archivos sensibles / binarios
+.env
+.env.*
+*.keystore
+*.jks
+*.p12
+*.pem
+
+# SQLite u otros binarios locales
+*.db
+*.sqlite
+*.sqlite3
+*.db-journal

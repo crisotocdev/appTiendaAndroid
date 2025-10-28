@@ -1,0 +1,35 @@
+{
+  "name": "inventario-rn-starter",
+  "version": "1.0.0",
+  "private": true,
+  "main": "node_modules/expo/AppEntry.js",
+  "scripts": {
+    "start": "expo start",
+    "android": "expo run:android",
+    "ios": "expo run:ios",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "@react-navigation/native": "^6.1.17",
+    "@react-navigation/native-stack": "^6.9.26",
+    "dayjs": "^1.11.11",
+    "expo": "54.0.21",
+    "expo-background-fetch": "~14.0.7",
+    "expo-blur": "~15.0.7",
+    "expo-file-system": "~19.0.17",
+    "expo-image-picker": "~17.0.8",
+    "expo-linear-gradient": "~15.0.7",
+    "expo-notifications": "~0.32.12",
+    "expo-sqlite": "~16.0.8",
+    "expo-task-manager": "~14.0.8",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "react-native-safe-area-context": "~5.6.0",
+    "react-native-screens": "~4.16.0"
+  },
+  "devDependencies": {
+    "@babel/core": "^7.25.2",
+    "@types/react": "~19.1.10",
+    "typescript": "~5.9.2"
+  }
+}
