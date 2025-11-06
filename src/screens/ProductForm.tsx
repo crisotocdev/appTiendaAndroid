@@ -15,6 +15,7 @@ import * as ImagePicker from 'expo-image-picker';
 import * as FileSystem from 'expo-file-system';
 import { useTheme } from '../theme/ThemeProvider';
 import { useApp } from '../ui/providers/AppProvider';
+import { refreshExpiryNotifications } from '../notifications';
 
 // Evitamos fricciones de tipos con navigate/route por ahora
 type Props = NativeStackScreenProps<any>;
@@ -67,6 +68,40 @@ async function persistImage(uri: string): Promise<string> {
   }
 }
 
+// Lee la fecha de vencimiento desde el objeto producto y la normaliza a "YYYY-MM-DD"
+function pickExpiryFromProduct(p: any): string {
+  const raw =
+    p?.nextExpiry ??
+    p?.next_expiry ??
+    p?.expiry ??
+    p?.expirationDate ??
+    p?.expiryDate ??
+    p?.vence ??
+    p?.fechaVencimiento ??
+    null;
+
+  if (!raw) return '';
+
+  if (raw instanceof Date) {
+    return raw.toISOString().slice(0, 10);
+  }
+
+  const s = String(raw).trim();
+  if (!s) return '';
+
+  // Si viene con hora: "2025-11-30T00:00:00...", me quedo solo con la fecha
+  const base = s.split(/[T\s]/)[0];
+
+  // DD/MM/YYYY o DD-MM-YYYY → YYYY-MM-DD
+  const m = base.match(/^(\d{2})[\/-](\d{2})[\/-](\d{4})$/);
+  if (m) {
+    const [, dd, mm, yyyy] = m;
+    return `${yyyy}-${mm}-${dd}`;
+  }
+
+  return base; // ej: "2025-11-30"
+}
+
 export default function ProductForm({ route, navigation }: Props) {
   const t = useTheme();
   const { usecases } = useApp();
@@ -81,6 +116,7 @@ export default function ProductForm({ route, navigation }: Props) {
   const [category, setCategory] = useState('');
   const [sku, setSku] = useState('');
   const [photoUrl, setPhotoUrl] = useState<string | null>(null);
+  const [expiry, setExpiry] = useState(''); // YYYY-MM-DD o vacío
 
   const isEdit = !!productId;
 
@@ -106,6 +142,8 @@ export default function ProductForm({ route, navigation }: Props) {
       setPhotoUrl(
         p.photoUrl ?? p.photoURL ?? p.photo ?? p.imageUrl ?? p.photoUri ?? null
       );
+      // Fecha de vencimiento (normalizada a YYYY-MM-DD para mostrarla)
+      setExpiry(pickExpiryFromProduct(p));
     } catch (e) {
       Alert.alert('Error', (e as Error)?.message ?? 'No se pudo cargar el producto.');
       navigation.goBack();
@@ -164,6 +202,10 @@ export default function ProductForm({ route, navigation }: Props) {
 
       const u: any = usecases as any;
 
+      // normalizamos un poco la fecha para el payload (puede ir vacía)
+      const expiryStr = oneLine(expiry);      // '' o '2025-12-31'
+      const expiryOrNull = expiryStr || null; // null si está vacía
+
       // payload súper compatible (mapea alias comunes)
       const payload = {
         id: productId ?? undefined,
@@ -178,7 +220,16 @@ export default function ProductForm({ route, navigation }: Props) {
         photoURL: photoUrl ?? null,
         photoUri: photoUrl ?? null,
         photo: photoUrl ?? null,
+
+        // 👇 vencimiento con los alias que el repo entiende
+        nextExpiry: expiryOrNull,
+        next_expiry: expiryOrNull,
+        expiry: expiryOrNull,
+        expirationDate: expiryOrNull,
+        expiryDate: expiryOrNull,
       };
+
+      console.log('[ProductForm.onSave] payload =', payload);
 
       if (isEdit) {
         // Intento UPDATE explícito; si no existe, upsert/save o última instancia create
@@ -228,13 +279,20 @@ export default function ProductForm({ route, navigation }: Props) {
         await invoke(createUC, payload);
       }
 
+      // 👇 Reprogramar notificaciones con los datos actuales
+      try {
+        await refreshExpiryNotifications();
+      } catch (err) {
+        console.log('[ProductForm] error al refrescar notificaciones', err);
+      }
+
       navigation.goBack();
     } catch (e) {
       Alert.alert('Error', (e as Error)?.message ?? 'No se pudo guardar el producto.');
     } finally {
       setSaving(false);
     }
-  }, [isEdit, productId, name, brand, category, sku, photoUrl, usecases, navigation]);
+  }, [isEdit, productId, name, brand, category, sku, photoUrl, expiry, usecases, navigation]);
 
   return (
     <ScrollView
@@ -267,16 +325,45 @@ export default function ProductForm({ route, navigation }: Props) {
 
       {/* Campos */}
       <Text style={styles.label}>Nombre *</Text>
-      <TextInput value={name} onChangeText={setName} style={styles.input} placeholder="Ej. Café en grano" />
+      <TextInput
+        value={name}
+        onChangeText={setName}
+        style={styles.input}
+        placeholder="Ej. Café en grano"
+      />
 
       <Text style={styles.label}>Marca</Text>
-      <TextInput value={brand} onChangeText={setBrand} style={styles.input} placeholder="Opcional" />
+      <TextInput
+        value={brand}
+        onChangeText={setBrand}
+        style={styles.input}
+        placeholder="Opcional"
+      />
 
       <Text style={styles.label}>Categoría</Text>
-      <TextInput value={category} onChangeText={setCategory} style={styles.input} placeholder="Opcional" />
+      <TextInput
+        value={category}
+        onChangeText={setCategory}
+        style={styles.input}
+        placeholder="Opcional"
+      />
 
       <Text style={styles.label}>SKU</Text>
-      <TextInput value={sku} onChangeText={setSku} style={styles.input} placeholder="Opcional" />
+      <TextInput
+        value={sku}
+        onChangeText={setSku}
+        style={styles.input}
+        placeholder="Opcional"
+      />
+
+      {/* Fecha de vencimiento */}
+      <Text style={styles.label}>Fecha de vencimiento</Text>
+      <TextInput
+        value={expiry}
+        onChangeText={setExpiry}
+        style={styles.input}
+        placeholder="YYYY-MM-DD (opcional)"
+      />
 
       {/* Botones */}
       <View style={{ flexDirection: 'row', gap: 10, marginTop: 16 }}>
