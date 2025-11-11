@@ -43,6 +43,23 @@ const SKELETON_COUNT = 5;
 const oneLine = (v: any): string =>
   String(v ?? '').replace(/[\r\n\u2028\u2029]/g, ' ').trim();
 
+function isValidYMD(value: string): boolean {
+  if (!value) return false;
+  // Debe ser AAAA-MM-DD
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
+
+  const [y, m, d] = value.split('-').map(Number);
+  const date = new Date(y, m - 1, d);
+
+  // Comprobar que la fecha exista realmente (no 2025-13-40)
+  return (
+    date.getFullYear() === y &&
+    date.getMonth() === m - 1 &&
+    date.getDate() === d
+  );
+}
+
+
 function pickExpiry(q: any): string | null {
   const raw =
     q?.nextExpiry ??       // lo que viene del SELECT_BASE (next_expiry AS nextExpiry)
@@ -582,132 +599,189 @@ export default function ProductList({ navigation }: Props) {
   }, []);
 
   // Guardar producto nuevo
-  const onSaveNewProduct = useCallback(async () => {
-    const name = (newName || '').trim();
-    if (!name) {
-      Alert.alert('Falta el nombre', 'Escribe un nombre para el producto.');
-      return;
-    }
-    const qtyNum = Math.max(0, Number.isFinite(Number(newQty)) ? Number(newQty) : 0);
-    const minStockNum = Math.max(
-      0,
-      Number.isFinite(Number(newMinStock)) ? Number(newMinStock) : 0
+const onSaveNewProduct = useCallback(async () => {
+  const name = (newName || '').trim();
+  if (!name) {
+    Alert.alert('Falta el nombre', 'Escribe un nombre para el producto.');
+    return;
+  }
+
+  // Validar fecha si viene
+  const expiryTrim = newExpiry?.trim() || '';
+  if (expiryTrim && !isValidYMD(expiryTrim)) {
+    Alert.alert(
+      'Fecha inválida',
+      'La fecha de vencimiento debe tener el formato AAAA-MM-DD y ser una fecha válida.'
     );
+    return;
+  }
 
-    const payload = {
-      name,
-      brand: newBrand?.trim() || null,
-      sku: newSku?.trim() || null,
-      qty: qtyNum,
-      minStock: minStockNum,
-      nextExpiry: newExpiry?.trim() || null,
-      photoUrl: photoUri || null,
-      photoUri: photoUri || null,
-    };
+  const qtyNum = Math.max(
+    0,
+    Number.isFinite(Number(newQty)) ? Number(newQty) : 0
+  );
+  const minStockNum = Math.max(
+    0,
+    Number.isFinite(Number(newMinStock)) ? Number(newMinStock) : 0
+  );
 
-    const createFn = pickCreateFn(app);
+  const payload = {
+    name,
+    brand: newBrand?.trim() || null,
+    sku: newSku?.trim() || null,
+    qty: qtyNum,
+    minStock: minStockNum,
+    nextExpiry: expiryTrim || null,
+    photoUrl: photoUri || null,
+    photoUri: photoUri || null,
+  };
 
-    try {
-      setSaving(true);
+  const createFn = pickCreateFn(app);
 
-      if (typeof createFn === 'function') {
-        await createFn(payload);
-      } else if (typeof (productRepo as any)?.upsert === 'function') {
-        await (productRepo as any).upsert(payload);
-      } else if (typeof (productRepo as any)?.createProduct === 'function') {
-        await (productRepo as any).createProduct(payload);
-      } else {
-        const id = String(Date.now());
-        setListState(prev => ([...(prev || []), { id, ...payload } as any]));
-      }
+  try {
+    setSaving(true);
 
-      setShowAdd(false);
-      setNewName(''); setNewBrand(''); setNewSku('');
-      setNewQty('0'); setNewMinStock('0'); setNewExpiry(''); setPhotoUri(null);
-      await fetch();
-    } catch (e) {
-      console.log('[ProductList] crear error', e);
-      Alert.alert('Error', 'No se pudo crear el producto.');
-    } finally {
-      setSaving(false);
+    if (typeof createFn === 'function') {
+      await createFn(payload);
+    } else if (typeof (productRepo as any)?.upsert === 'function') {
+      await (productRepo as any).upsert(payload);
+    } else if (typeof (productRepo as any)?.createProduct === 'function') {
+      await (productRepo as any).createProduct(payload);
+    } else {
+      const id = String(Date.now());
+      setListState(prev => ([...(prev || []), { id, ...payload } as any]));
     }
-  }, [app, newName, newBrand, newSku, newQty, newMinStock, newExpiry, photoUri, fetch]);
 
-  // Abrir editor con datos del item
-  const openEdit = useCallback((item: ProductVM) => {
-    setEditId(item.id);
-    setEditName(item.name || '');
-    setEditBrand(item.brand || '');
-    setEditSku(item.sku || '');
-    setEditQty(String(Number.isFinite(Number(item.qty)) ? item.qty : 0));
-    setEditMinStock(
-      item.minStock != null && Number.isFinite(Number(item.minStock))
-        ? String(item.minStock)
-        : '3'
-    );
-    setEditExpiry(item.nextExpiry || '');
-    setEditPhotoUri(item.photoUrl || null);
-    setShowEdit(true);
-  }, []);
+    setShowAdd(false);
+    // Dejamos valores “amigables” para el siguiente alta
+    setNewName('');
+    setNewBrand('');
+    setNewSku('');
+    setNewQty('0');
+    setNewMinStock('3');       // 👈 vuelve al default útil en vez de '0'
+    setNewExpiry('');
+    setPhotoUri(null);
+
+    Alert.alert('Listo', 'El producto se creó correctamente.');
+    await fetch();
+  } catch (e) {
+    console.log('[ProductList] crear error', e);
+    Alert.alert('Error', 'No se pudo crear el producto.');
+  } finally {
+    setSaving(false);
+  }
+}, [app, newName, newBrand, newSku, newQty, newMinStock, newExpiry, photoUri, fetch]);
+
+
+// Abrir editor con datos del item
+const openEdit = useCallback((item: ProductVM) => {
+  console.log('[ProductList] openEdit', item?.id); // 👈 solo para depurar, se puede borrar luego
+
+  setEditId(item.id);
+  setEditName(item.name || '');
+  setEditBrand(item.brand || '');
+  setEditSku(item.sku || '');
+  setEditQty(
+    Number.isFinite(Number(item.qty))
+      ? String(item.qty)
+      : '0'
+  );
+  setEditMinStock(
+    item.minStock != null && Number.isFinite(Number(item.minStock))
+      ? String(item.minStock)
+      : '0'
+  );
+  setEditExpiry(item.nextExpiry || '');
+  setEditPhotoUri(item.photoUrl || null);
+
+  // 👇 MUY IMPORTANTE: esto es lo que muestra el modal
+  setShowEdit(true);
+}, []);
+
 
   // Guardar cambios (editar)
-  const onSaveEdit = useCallback(async () => {
-    const id = editId;
-    const name = (editName || '').trim();
-    if (!id) return;
-    if (!name) {
-      Alert.alert('Falta el nombre', 'Escribe un nombre para el producto.');
-      return;
-    }
-    const qtyNum = Math.max(0, Number.isFinite(Number(editQty)) ? Number(editQty) : 0);
-    const minStockNum = Math.max(
-      0,
-      Number.isFinite(Number(editMinStock)) ? Number(editMinStock) : 0
+const onSaveEdit = useCallback(async () => {
+  const id = editId;
+  const name = (editName || '').trim();
+  if (!id) return;
+  if (!name) {
+    Alert.alert('Falta el nombre', 'Escribe un nombre para el producto.');
+    return;
+  }
+
+  const expiryTrim = editExpiry?.trim() || '';
+  if (expiryTrim && !isValidYMD(expiryTrim)) {
+    Alert.alert(
+      'Fecha inválida',
+      'La fecha de vencimiento debe tener el formato AAAA-MM-DD y ser una fecha válida.'
     );
+    return;
+  }
 
-    const payload = {
-      id,
-      name,
-      brand: editBrand?.trim() || null,
-      sku: editSku?.trim() || null,
-      qty: qtyNum,
-      minStock: minStockNum,
-      nextExpiry: editExpiry?.trim() || null,
-      photoUrl: editPhotoUri || null,
-      photoUri: editPhotoUri || null,
-    };
+  const qtyNum = Math.max(
+    0,
+    Number.isFinite(Number(editQty)) ? Number(editQty) : 0
+  );
+  const minStockNum = Math.max(
+    0,
+    Number.isFinite(Number(editMinStock)) ? Number(editMinStock) : 0
+  );
 
-    const saveFn = pickSaveFn(app);
+  const payload = {
+    id,
+    name,
+    brand: editBrand?.trim() || null,
+    sku: editSku?.trim() || null,
+    qty: qtyNum,
+    minStock: minStockNum,
+    nextExpiry: expiryTrim || null,
+    photoUrl: editPhotoUri || null,
+    photoUri: editPhotoUri || null,
+  };
 
-    try {
-      setUpdating(true);
+  const saveFn = pickSaveFn(app);
 
-      if (typeof saveFn === 'function') {
-        await saveFn(payload);
-      } else if (typeof (productRepo as any)?.upsert === 'function') {
-        await (productRepo as any).upsert(payload);
-      } else {
-        // Optimista sin backend
-        setListState(prev => {
-          const base = Array.isArray(prev) ? prev : [];
-          return base.map((row: any) => {
-            const q = row?.props ?? row;
-            if (String(q?.id) !== String(id)) return row;
-            const newProps = { ...q, ...payload };
-            return row?.props ? { ...row, props: newProps } : newProps;
-          });
+  try {
+    setUpdating(true);
+
+    if (typeof saveFn === 'function') {
+      await saveFn(payload);
+    } else if (typeof (productRepo as any)?.upsert === 'function') {
+      await (productRepo as any).upsert(payload);
+    } else {
+      // Optimista sin backend
+      setListState(prev => {
+        const base = Array.isArray(prev) ? prev : [];
+        return base.map((row: any) => {
+          const q = row?.props ?? row;
+          if (String(q?.id) !== String(id)) return row;
+          const newProps = { ...q, ...payload };
+          return row?.props ? { ...row, props: newProps } : newProps;
         });
-      }
-
-      setShowEdit(false);
-      await fetch();
-    } catch (e) {
-      console.log('[ProductList] update error', e);
-      Alert.alert('Error', 'No se pudo guardar el producto.');
-    } finally {
-      setUpdating(false);
+      });
     }
-  }, [app, editId, editName, editBrand, editSku, editQty, editMinStock, editExpiry, editPhotoUri, fetch]);
+
+    setShowEdit(false);
+    Alert.alert('Listo', 'Los cambios se guardaron correctamente.');
+    await fetch();
+  } catch (e) {
+    console.log('[ProductList] update error', e);
+    Alert.alert('Error', 'No se pudo guardar el producto.');
+  } finally {
+    setUpdating(false);
+  }
+}, [
+  app,
+  editId,
+  editName,
+  editBrand,
+  editSku,
+  editQty,
+  editMinStock,
+  editExpiry,
+  editPhotoUri,
+  fetch,
+]);
 
   // Eliminar (persistente con SQLite)
   const onDelete = useCallback(async (id: string) => {
@@ -791,7 +865,8 @@ const renderItem = ({ item }: { item: any }) => {
           <View style={styles.mainCol}>
             <Text style={styles.name}>{item.name}</Text>
             <Text style={styles.meta}>
-              {[item.brand, item.category, item.sku].filter(Boolean).join(' · ') || '—'}
+              {[item.brand, item.category, item.sku].filter(Boolean).join(' · ') ||
+                '—'}
             </Text>
 
             <View style={styles.pillRow}>
@@ -826,7 +901,10 @@ const renderItem = ({ item }: { item: any }) => {
           </View>
 
           <View style={styles.qtyControls}>
-            <TouchableOpacity style={styles.qtyBtn} onPress={() => onDelta(item.id, -1)}>
+            <TouchableOpacity
+              style={styles.qtyBtn}
+              onPress={() => onDelta(item.id, -1)}
+            >
               <Text style={styles.qtyBtnText}>−</Text>
             </TouchableOpacity>
 
@@ -840,7 +918,10 @@ const renderItem = ({ item }: { item: any }) => {
               {qty}
             </Text>
 
-            <TouchableOpacity style={styles.qtyBtn} onPress={() => onDelta(item.id, +1)}>
+            <TouchableOpacity
+              style={styles.qtyBtn}
+              onPress={() => onDelta(item.id, +1)}
+            >
               <Text style={styles.qtyBtnText}>＋</Text>
             </TouchableOpacity>
 
@@ -859,198 +940,431 @@ const renderItem = ({ item }: { item: any }) => {
   );
 };
 
+const EmptyState = () => (
+  <View style={styles.emptyWrap}>
+    <Text style={styles.emptyTitle}>No hay productos</Text>
+    <Text style={styles.emptySubtitle}>Agrega el primero para comenzar.</Text>
+    <TouchableOpacity
+      style={[styles.addButton, styles.primary]}
+      onPress={() => setShowAdd(true)}
+    >
+      <Text style={styles.addButtonText}>Agregar producto</Text>
+    </TouchableOpacity>
+  </View>
+);
 
-  const EmptyState = () => (
-    <View style={styles.emptyWrap}>
-      <Text style={styles.emptyTitle}>No hay productos</Text>
-      <Text style={styles.emptySubtitle}>Agrega el primero para comenzar.</Text>
-      <TouchableOpacity style={[styles.addButton, styles.primary]} onPress={() => setShowAdd(true)}>
-        <Text style={styles.addButtonText}>Agregar producto</Text>
-      </TouchableOpacity>
-    </View>
-  );
+return (
+  <View style={styles.container}>
+    <FlatList
+      data={data}
+      keyExtractor={(it) => String(it.id)}
+      renderItem={renderItem}
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+      }
+      ListEmptyComponent={!loading ? <EmptyState /> : null}
+      contentContainerStyle={
+        data.length === 0
+          ? { flex: 1, justifyContent: 'center', alignItems: 'center' }
+          : undefined
+      }
+    />
 
-  return (
-    <View style={styles.container}>
-      <FlatList
-        data={data}
-        keyExtractor={(it) => String(it.id)}
-        renderItem={renderItem}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        ListEmptyComponent={!loading ? <EmptyState /> : null}
-        contentContainerStyle={
-          data.length === 0 ? { flex: 1, justifyContent: 'center', alignItems: 'center' } : undefined
-        }
-      />
+    {/* FAB */}
+    <TouchableOpacity
+      style={styles.fab}
+      onPress={() => setShowAdd(true)}
+      accessibilityLabel="Nuevo producto"
+    >
+      <Text style={styles.fabIcon}>＋</Text>
+    </TouchableOpacity>
 
-      {/* FAB */}
-      <TouchableOpacity style={styles.fab} onPress={() => setShowAdd(true)} accessibilityLabel="Nuevo producto">
-        <Text style={styles.fabIcon}>＋</Text>
-      </TouchableOpacity>
+    {/* Modal: alta NUEVO producto */}
+    <Modal
+      visible={showAdd}
+      transparent
+      animationType="fade"
+      onRequestClose={() => setShowAdd(false)}
+    >
+      <View style={styles.modal}>
+        <View style={styles.modalCard}>
+          <Text style={styles.modalTitle}>Nuevo producto</Text>
 
-      {/* Modal: alta completa */}
-      <Modal visible={showAdd} transparent animationType="fade" onRequestClose={() => setShowAdd(false)}>
-        <View style={styles.modal}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Nuevo producto</Text>
-
-            <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ paddingBottom: 8 }}>
-              {/* Foto */}
-              <View style={styles.photoRow}>
-                <View style={styles.photoPreviewWrap}>
-                  {photoUri
-                    ? <Image source={{ uri: photoUri }} style={styles.photoPreview} />
-                    : <View style={[styles.photoPreview, styles.thumbEmpty]} />}
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{ paddingBottom: 8 }}
+          >
+            {/* Foto */}
+            <View style={styles.photoRow}>
+              <View style={styles.photoPreviewWrap}>
+                {photoUri ? (
+                  <Image
+                    source={{ uri: photoUri }}
+                    style={styles.photoPreview}
+                  />
+                ) : (
+                  <View style={[styles.photoPreview, styles.thumbEmpty]} />
+                )}
+              </View>
+              <View style={{ flex: 1 }}>
+                <View style={{ flexDirection: 'row' }}>
+                  <TouchableOpacity
+                    style={[styles.smallChip, styles.secondary]}
+                    onPress={() => pickFromLibrary(setPhotoUri)}
+                  >
+                    <Text style={styles.smallChipText}>Galería</Text>
+                  </TouchableOpacity>
+                  <View style={{ width: 8 }} />
+                  <TouchableOpacity
+                    style={[styles.smallChip, styles.secondary]}
+                    onPress={() => takePhoto(setPhotoUri)}
+                  >
+                    <Text style={styles.smallChipText}>Cámara</Text>
+                  </TouchableOpacity>
                 </View>
-                <View style={{ flex: 1 }}>
-                  <View style={{ flexDirection: 'row' }}>
-                    <TouchableOpacity style={[styles.smallChip, styles.secondary]} onPress={() => pickFromLibrary(setPhotoUri)}>
-                      <Text style={styles.smallChipText}>Galería</Text>
-                    </TouchableOpacity>
-                    <View style={{ width: 8 }} />
-                    <TouchableOpacity style={[styles.smallChip, styles.secondary]} onPress={() => takePhoto(setPhotoUri)}>
-                      <Text style={styles.smallChipText}>Cámara</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              </View>
-
-              {/* Campos */}
-              <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Nombre</Text>
-                <TextInput
-                  placeholder="Nombre del producto"
-                  value={editName}
-                  onChangeText={setEditName}
-                  autoFocus
-                  style={styles.input}
-                  placeholderTextColor="rgba(255,255,255,0.5)"
-                />
-              </View>
-
-              <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Marca</Text>
-                <TextInput
-                  placeholder="Marca"
-                  value={editBrand}
-                  onChangeText={setEditBrand}
-                  style={styles.input}
-                  placeholderTextColor="rgba(255,255,255,0.5)"
-                />
-              </View>
-
-              <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>SKU (opcional)</Text>
-                <TextInput
-                  placeholder="SKU (opcional)"
-                  value={editSku}
-                  onChangeText={setEditSku}
-                  autoCapitalize="characters"
-                  style={styles.input}
-                  placeholderTextColor="rgba(255,255,255,0.5)"
-                />
-              </View>
-
-              <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Stock</Text>
-                <TextInput
-                  placeholder="Ej: 12"
-                  value={editQty}
-                  onChangeText={setEditQty}
-                  keyboardType="numeric"
-                  style={styles.input}
-                  placeholderTextColor="rgba(255,255,255,0.5)"
-                />
-              </View>
-
-              <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Stock mínimo (bajo stock)</Text>
-                <TextInput
-                  placeholder="Ej: 3 (opcional)"
-                  value={editMinStock}
-                  onChangeText={setEditMinStock}
-                  keyboardType="numeric"
-                  style={styles.input}
-                  placeholderTextColor="rgba(255,255,255,0.5)"
-                />
-              </View>
-
-              <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Fecha de vencimiento</Text>
-                <TextInput
-                  placeholder="AAAA-MM-DD"
-                  value={editExpiry}
-                  onChangeText={setEditExpiry}
-                  style={styles.input}
-                  placeholderTextColor="rgba(255,255,255,0.5)"
-                />
-              </View>
-
-              <View style={{ flexDirection: 'row', marginBottom: 8 }}>
-                <TouchableOpacity
-                  style={[styles.smallChip, styles.secondary]}
-                  onPress={() => setEditExpiryOffset(0)}
-                >
-                  <Text style={styles.smallChipText}>Hoy</Text>
-                </TouchableOpacity>
-                <View style={{ width: 8 }} />
-                <TouchableOpacity
-                  style={[styles.smallChip, styles.secondary]}
-                  onPress={() => setEditExpiryOffset(7)}
-                >
-                  <Text style={styles.smallChipText}>+7d</Text>
-                </TouchableOpacity>
-                <View style={{ width: 8 }} />
-                <TouchableOpacity
-                  style={[styles.smallChip, styles.secondary]}
-                  onPress={() => setEditExpiryOffset(30)}
-                >
-                  <Text style={styles.smallChipText}>+30d</Text>
-                </TouchableOpacity>
-                <View style={{ width: 8 }} />
-                <TouchableOpacity
-                  style={[styles.smallChip, styles.secondary]}
-                  onPress={() => setEditExpiry('')}
-                >
-                  <Text style={styles.smallChipText}>Limpiar</Text>
-                </TouchableOpacity>
-              </View>
-
-            </ScrollView>
-
-            {/* Acciones edición */}
-            <View style={[styles.modalActions, { justifyContent: 'space-between' }]}>
-              <TouchableOpacity
-                onPress={() => editId && confirmDelete(editId)}
-                style={[styles.addButton, { borderColor: 'rgba(255,100,100,0.5)', backgroundColor: 'rgba(255,80,80,0.18)' }]}
-                disabled={deleting}
-              >
-                <Text style={[styles.addButtonText]}>Eliminar</Text>
-              </TouchableOpacity>
-
-              <View style={{ flexDirection: 'row' }}>
-                <TouchableOpacity
-                  onPress={() => setShowEdit(false)}
-                  style={[styles.addButton, styles.secondary, { marginRight: 8 }]}
-                  disabled={updating}
-                >
-                  <Text style={styles.addButtonText}>Cancelar</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={onSaveEdit}
-                  style={[styles.addButton, styles.primary]}
-                  disabled={updating}
-                >
-                  <Text style={styles.addButtonText}>{updating ? 'Guardando…' : 'Guardar'}</Text>
-                </TouchableOpacity>
               </View>
             </View>
 
+            {/* Campos - NUEVO PRODUCTO */}
+            <View style={styles.fieldGroup}>
+              <Text style={styles.fieldLabel}>Nombre</Text>
+              <TextInput
+                placeholder="Ej: Cerveza IPA"
+                value={newName}
+                onChangeText={setNewName}
+                autoFocus
+                style={styles.input}
+                placeholderTextColor="rgba(255,255,255,0.5)"
+              />
+            </View>
+
+            <View style={styles.fieldGroup}>
+              <Text style={styles.fieldLabel}>Marca</Text>
+              <TextInput
+                placeholder="Ej: Kunstmann"
+                value={newBrand}
+                onChangeText={setNewBrand}
+                style={styles.input}
+                placeholderTextColor="rgba(255,255,255,0.5)"
+              />
+            </View>
+
+            <View style={styles.fieldGroup}>
+              <Text style={styles.fieldLabel}>SKU (opcional)</Text>
+              <Text style={styles.fieldHint}>
+                Código, código de barras o identificador interno
+              </Text>
+              <TextInput
+                placeholder="Ej: SKU-00123"
+                value={newSku}
+                onChangeText={setNewSku}
+                autoCapitalize="characters"
+                style={styles.input}
+                placeholderTextColor="rgba(255,255,255,0.5)"
+              />
+            </View>
+
+            <View style={styles.fieldGroup}>
+              <Text style={styles.fieldLabel}>Stock inicial</Text>
+              <Text style={styles.fieldHint}>
+                Unidades que tienes ahora mismo
+              </Text>
+              <TextInput
+                placeholder="Ej: 12"
+                value={newQty}
+                onChangeText={setNewQty}
+                keyboardType="numeric"
+                style={styles.input}
+                placeholderTextColor="rgba(255,255,255,0.5)"
+              />
+            </View>
+
+            <View style={styles.fieldGroup}>
+              <Text style={styles.fieldLabel}>Stock mínimo (bajo stock)</Text>
+              <Text style={styles.fieldHint}>
+                Solo para mostrar la etiqueta BAJO STOCK en la lista
+              </Text>
+              <TextInput
+                placeholder="Ej: 3 (opcional)"
+                value={newMinStock}
+                onChangeText={setNewMinStock}
+                keyboardType="numeric"
+                style={styles.input}
+                placeholderTextColor="rgba(255,255,255,0.5)"
+              />
+            </View>
+
+            <View style={styles.fieldGroup}>
+              <Text style={styles.fieldLabel}>Fecha de vencimiento</Text>
+              <Text style={styles.fieldHint}>Formato AAAA-MM-DD</Text>
+              <TextInput
+                placeholder="Ej: 2024-12-31"
+                value={newExpiry}
+                onChangeText={setNewExpiry}
+                style={styles.input}
+                placeholderTextColor="rgba(255,255,255,0.5)"
+              />
+            </View>
+
+            <View style={{ flexDirection: 'row', marginBottom: 8 }}>
+              <TouchableOpacity
+                style={[styles.smallChip, styles.secondary]}
+                onPress={() => setExpiryOffset(0)}
+              >
+                <Text style={styles.smallChipText}>Hoy</Text>
+              </TouchableOpacity>
+              <View style={{ width: 8 }} />
+              <TouchableOpacity
+                style={[styles.smallChip, styles.secondary]}
+                onPress={() => setExpiryOffset(7)}
+              >
+                <Text style={styles.smallChipText}>+7d</Text>
+              </TouchableOpacity>
+              <View style={{ width: 8 }} />
+              <TouchableOpacity
+                style={[styles.smallChip, styles.secondary]}
+                onPress={() => setExpiryOffset(30)}
+              >
+                <Text style={styles.smallChipText}>+30d</Text>
+              </TouchableOpacity>
+              <View style={{ width: 8 }} />
+              <TouchableOpacity
+                style={[styles.smallChip, styles.secondary]}
+                onPress={() => setNewExpiry('')}
+              >
+                <Text style={styles.smallChipText}>Limpiar</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+
+          {/* Acciones NUEVO producto */}
+          <View
+            style={[styles.modalActions, { justifyContent: 'flex-end' }]}
+          >
+            <TouchableOpacity
+              onPress={() => setShowAdd(false)}
+              style={[styles.addButton, styles.secondary, { marginRight: 8 }]}
+              disabled={saving}
+            >
+              <Text style={styles.addButtonText}>Cancelar</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              onPress={onSaveNewProduct}
+              style={[styles.addButton, styles.primary]}
+              disabled={saving}
+            >
+              <Text style={styles.addButtonText}>
+                {saving ? 'Guardando…' : 'Guardar'}
+              </Text>
+            </TouchableOpacity>
           </View>
         </View>
-      </Modal>
-    </View>
-  );
+      </View>
+    </Modal>
+
+    {/* Modal: edición producto */}
+    <Modal
+      visible={showEdit}
+      transparent
+      animationType="fade"
+      onRequestClose={() => setShowEdit(false)}
+    >
+      <View style={styles.modal}>
+        <View style={styles.modalCard}>
+          <Text style={styles.modalTitle}>Editar producto</Text>
+
+          <ScrollView
+            keyboardShouldPersistTaps="handled"
+            contentContainerStyle={{ paddingBottom: 8 }}
+          >
+            {/* Foto (edición) */}
+            <View style={styles.photoRow}>
+              <View style={styles.photoPreviewWrap}>
+                {editPhotoUri ? (
+                  <Image
+                    source={{ uri: editPhotoUri }}
+                    style={styles.photoPreview}
+                  />
+                ) : (
+                  <View style={[styles.photoPreview, styles.thumbEmpty]} />
+                )}
+              </View>
+              <View style={{ flex: 1 }}>
+                <View style={{ flexDirection: 'row' }}>
+                  <TouchableOpacity
+                    style={[styles.smallChip, styles.secondary]}
+                    onPress={() => pickFromLibrary(setEditPhotoUri)}
+                  >
+                    <Text style={styles.smallChipText}>Galería</Text>
+                  </TouchableOpacity>
+                  <View style={{ width: 8 }} />
+                  <TouchableOpacity
+                    style={[styles.smallChip, styles.secondary]}
+                    onPress={() => takePhoto(setEditPhotoUri)}
+                  >
+                    <Text style={styles.smallChipText}>Cámara</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+
+            {/* Campos - EDITAR PRODUCTO */}
+            <View style={styles.fieldGroup}>
+              <Text style={styles.fieldLabel}>Nombre</Text>
+              <TextInput
+                placeholder="Ej: Cerveza IPA"
+                value={editName}
+                onChangeText={setEditName}
+                style={styles.input}
+                placeholderTextColor="rgba(255,255,255,0.5)"
+              />
+            </View>
+
+            <View style={styles.fieldGroup}>
+              <Text style={styles.fieldLabel}>Marca</Text>
+              <TextInput
+                placeholder="Ej: Kunstmann"
+                value={editBrand}
+                onChangeText={setEditBrand}
+                style={styles.input}
+                placeholderTextColor="rgba(255,255,255,0.5)"
+              />
+            </View>
+
+            <View style={styles.fieldGroup}>
+              <Text style={styles.fieldLabel}>SKU (opcional)</Text>
+              <Text style={styles.fieldHint}>
+                Código, código de barras o identificador interno
+              </Text>
+              <TextInput
+                placeholder="Ej: SKU-00123"
+                value={editSku}
+                onChangeText={setEditSku}
+                autoCapitalize="characters"
+                style={styles.input}
+                placeholderTextColor="rgba(255,255,255,0.5)"
+              />
+            </View>
+
+            <View style={styles.fieldGroup}>
+              <Text style={styles.fieldLabel}>Stock actual</Text>
+              <Text style={styles.fieldHint}>
+                Unidades que tienes ahora mismo
+              </Text>
+              <TextInput
+                placeholder="Ej: 12"
+                value={editQty}
+                onChangeText={setEditQty}
+                keyboardType="numeric"
+                style={styles.input}
+                placeholderTextColor="rgba(255,255,255,0.5)"
+              />
+            </View>
+
+            <View style={styles.fieldGroup}>
+              <Text style={styles.fieldLabel}>Stock mínimo (bajo stock)</Text>
+              <Text style={styles.fieldHint}>
+                Solo para mostrar la etiqueta BAJO STOCK en la lista
+              </Text>
+              <TextInput
+                placeholder="Ej: 3 (opcional)"
+                value={editMinStock}
+                onChangeText={setEditMinStock}
+                keyboardType="numeric"
+                style={styles.input}
+                placeholderTextColor="rgba(255,255,255,0.5)"
+              />
+            </View>
+
+            <View style={styles.fieldGroup}>
+              <Text style={styles.fieldLabel}>Fecha de vencimiento</Text>
+              <Text style={styles.fieldHint}>Formato AAAA-MM-DD</Text>
+              <TextInput
+                placeholder="Ej: 2024-12-31"
+                value={editExpiry}
+                onChangeText={setEditExpiry}
+                style={styles.input}
+                placeholderTextColor="rgba(255,255,255,0.5)"
+              />
+            </View>
+
+            <View style={{ flexDirection: 'row', marginBottom: 8 }}>
+              <TouchableOpacity
+                style={[styles.smallChip, styles.secondary]}
+                onPress={() => setEditExpiryOffset(0)}
+              >
+                <Text style={styles.smallChipText}>Hoy</Text>
+              </TouchableOpacity>
+              <View style={{ width: 8 }} />
+              <TouchableOpacity
+                style={[styles.smallChip, styles.secondary]}
+                onPress={() => setEditExpiryOffset(7)}
+              >
+                <Text style={styles.smallChipText}>+7d</Text>
+              </TouchableOpacity>
+              <View style={{ width: 8 }} />
+              <TouchableOpacity
+                style={[styles.smallChip, styles.secondary]}
+                onPress={() => setEditExpiryOffset(30)}
+              >
+                <Text style={styles.smallChipText}>+30d</Text>
+              </TouchableOpacity>
+              <View style={{ width: 8 }} />
+              <TouchableOpacity
+                style={[styles.smallChip, styles.secondary]}
+                onPress={() => setEditExpiry('')}
+              >
+                <Text style={styles.smallChipText}>Limpiar</Text>
+              </TouchableOpacity>
+            </View>
+          </ScrollView>
+
+          {/* Acciones edición */}
+          <View
+            style={[styles.modalActions, { justifyContent: 'space-between' }]}
+          >
+            <TouchableOpacity
+              onPress={() => editId && confirmDelete(editId)}
+              style={[
+                styles.addButton,
+                {
+                  borderColor: 'rgba(255,100,100,0.5)',
+                  backgroundColor: 'rgba(255,80,80,0.18)',
+                },
+              ]}
+              disabled={deleting}
+            >
+              <Text style={styles.addButtonText}>Eliminar</Text>
+            </TouchableOpacity>
+
+            <View style={{ flexDirection: 'row' }}>
+              <TouchableOpacity
+                onPress={() => setShowEdit(false)}
+                style={[
+                  styles.addButton,
+                  styles.secondary,
+                  { marginRight: 8 },
+                ]}
+                disabled={updating}
+              >
+                <Text style={styles.addButtonText}>Cancelar</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={onSaveEdit}
+                style={[styles.addButton, styles.primary]}
+                disabled={updating}
+              >
+                <Text style={styles.addButtonText}>
+                  {updating ? 'Guardando…' : 'Guardar'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </View>
+    </Modal>
+  </View>
+);
 }
 
 function SkeletonCard() {
@@ -1229,18 +1543,22 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
 
-  // NUEVO: grupo y label de cada campo
+  // Agrupador de campo + label + hint
   fieldGroup: {
     marginBottom: 14,
   },
   fieldLabel: {
-    color: '#9FB8C5',
-    fontSize: 11,
+    color: '#EFFFFB',
+    fontSize: 13,
     fontWeight: '700',
-    marginLeft: 4,
     marginBottom: 4,
-    letterSpacing: 0.3,
-    includeFontPadding: false,
+    letterSpacing: 0.2,
+  },
+  fieldHint: {
+    color: 'rgba(255,255,255,0.6)',
+    fontSize: 11,
+    marginBottom: 4,
+    opacity: 0.9,
   },
 
   input: {
@@ -1250,9 +1568,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     color: 'white',
-    marginBottom: 0, // el espacio lo da fieldGroup
+    marginBottom: 0, // el espacio ahora lo da fieldGroup
     backgroundColor: 'rgba(255,255,255,0.06)',
   },
+
   modalActions: { flexDirection: 'row', justifyContent: 'flex-end' },
 
   // Controles de cantidad
@@ -1371,5 +1690,6 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
   },
 });
+
 
 export {};
