@@ -2,47 +2,28 @@
 import React from 'react';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
-import { TouchableOpacity, Text } from 'react-native';
 
+// Pantallas reales
 import ProductList from '../screens/ProductList';
-import AddProductScreen from '../screens/AddProductScreen';
-import ExpirySettingsScreen from '../screens/ExpirySettingsScreen'; // 👈 NUEVA
+import ExpirySettingsScreen from '../screens/ExpirySettingsScreen';
 
+// Si quieres usar tipos más estrictos en el futuro:
 export type RootStackParamList = {
-  Products: undefined;
-  AddProduct: undefined;
-  ExpirySettings: undefined; // 👈 NUEVA RUTA
-  // Movements: { productId: string; productName: string };
+  ProductList: undefined;
+  ExpirySettings: undefined;
 };
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
-export default function Navigation() {
+export default function RootNavigation() {
   return (
     <NavigationContainer>
       <Stack.Navigator>
         <Stack.Screen
-          name="Products"
+          name="ProductList"
           component={ProductList}
-          options={({ navigation }) => ({
-            title: 'Inventario',
-            headerRight: () => (
-              <TouchableOpacity
-                onPress={() => navigation.navigate('ExpirySettings')}
-                style={{ paddingHorizontal: 12 }}
-              >
-                <Text style={{ fontSize: 18 }}>⚙️</Text>
-              </TouchableOpacity>
-            ),
-          })}
+          options={{ title: 'Inventario' }}
         />
-
-        <Stack.Screen
-          name="AddProduct"
-          component={AddProductScreen}
-          options={{ title: 'Nuevo producto' }}
-        />
-
         <Stack.Screen
           name="ExpirySettings"
           component={ExpirySettingsScreen}
