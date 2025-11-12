@@ -21,6 +21,7 @@ import { useApp } from '../ui/providers/AppProvider';
 import productRepo from '../infrastructure/persistence/sqlite/ProductRepoSQLite';
 import * as ImagePicker from 'expo-image-picker';
 import { getExpiryInfo } from '../utils/expiry';
+import { refreshExpiryNotifications, notifyStockAlert } from '../notifications';
 
 type Props = NativeStackScreenProps<any>;
 
@@ -34,10 +35,18 @@ type ProductVM = {
   qty?: number | null;
   nextExpiry?: string | null;
   daysToExpiry?: number | null;
-  minStock?: number | null; // 👈 NUEVO
+  minStock?: number | null;
 };
 
+type FilterMode = 'all' | 'aboutToExpire' | 'expired' | 'outOfStock' | 'lowStock';
+
 const SKELETON_COUNT = 5;
+
+function getStockStatus(qty: number, minStock: number): 'none' | 'low' | 'ok' {
+  if (qty <= 0) return 'none';                    // SIN STOCK
+  if (minStock > 0 && qty <= minStock) return 'low'; // BAJO STOCK
+  return 'ok';
+}
 
 /** Utils **/
 const oneLine = (v: any): string =>
@@ -45,13 +54,11 @@ const oneLine = (v: any): string =>
 
 function isValidYMD(value: string): boolean {
   if (!value) return false;
-  // Debe ser AAAA-MM-DD
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
 
   const [y, m, d] = value.split('-').map(Number);
   const date = new Date(y, m - 1, d);
 
-  // Comprobar que la fecha exista realmente (no 2025-13-40)
   return (
     date.getFullYear() === y &&
     date.getMonth() === m - 1 &&
@@ -59,11 +66,10 @@ function isValidYMD(value: string): boolean {
   );
 }
 
-
 function pickExpiry(q: any): string | null {
   const raw =
-    q?.nextExpiry ??       // lo que viene del SELECT_BASE (next_expiry AS nextExpiry)
-    q?.next_expiry ??      // por si en algún flujo llega crudo desde SQLite
+    q?.nextExpiry ??
+    q?.next_expiry ??
     q?.expiry ??
     q?.expiresAt ??
     q?.expirationDate ??
@@ -86,15 +92,6 @@ function pickExpiry(q: any): string | null {
   const pure = s.split(/[T\s]/)[0];
 
   return pure || null;
-}
-
-/** Colores para el pill de vencimiento (sin dependencias) **/
-type ExpiryColors = { bg: string; border: string };
-function expiryColors(n: number): ExpiryColors {
-  if (n < 0)  return { bg: 'rgba(255,0,0,0.18)',    border: 'rgba(255,0,0,0.35)'    }; // vencido
-  if (n === 0) return { bg: 'rgba(255,165,0,0.22)', border: 'rgba(255,165,0,0.45)' }; // hoy
-  if (n <= 7)  return { bg: 'rgba(255,215,0,0.18)', border: 'rgba(255,215,0,0.35)' }; // < 1 semana
-  return { bg: 'rgba(16,185,129,0.20)', border: 'rgba(16,185,129,0.45)' };            // ok
 }
 
 // Ejecuta funciones o métodos en objetos { execute/run/call/... }
@@ -237,9 +234,10 @@ async function tryListWithPayloads(fn: Function) {
       // @ts-ignore
       const res = t === undefined ? await fn() : await fn(t);
       const arr = extractList(res);
-      console.log('[ProductList] list returned len=', Array.isArray(arr) ? arr.length : 'n/a', 'sample0=', preview10(arr?.[0]));
       if (Array.isArray(arr)) return arr;
-    } catch (e) { last = e; }
+    } catch (e) {
+      last = e;
+    }
   }
   throw last ?? new Error('No pude obtener la lista de productos');
 }
@@ -304,7 +302,7 @@ export default function ProductList({ navigation }: Props) {
   const [newBrand, setNewBrand] = useState('');
   const [newSku, setNewSku] = useState('');
   const [newQty, setNewQty] = useState<string>('0');
-  const [newMinStock, setNewMinStock] = useState<string>('3'); // 👈 NUEVO
+  const [newMinStock, setNewMinStock] = useState<string>('3');
   const [newExpiry, setNewExpiry] = useState(''); // YYYY-MM-DD
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -316,11 +314,15 @@ export default function ProductList({ navigation }: Props) {
   const [editBrand, setEditBrand] = useState('');
   const [editSku, setEditSku] = useState('');
   const [editQty, setEditQty] = useState<string>('0');
-  const [editMinStock, setEditMinStock] = useState<string>('0'); // 👈 NUEVO
+  const [editMinStock, setEditMinStock] = useState<string>('0');
   const [editExpiry, setEditExpiry] = useState('');
   const [editPhotoUri, setEditPhotoUri] = useState<string | null>(null);
   const [updating, setUpdating] = useState(false);
   const [deleting, setDeleting] = useState(false);
+
+  // Búsqueda y filtros
+  const [search, setSearch] = useState('');
+  const [filter, setFilter] = useState<FilterMode>('all');
 
   // Fallbacks expuestos por provider
   const reload =
@@ -371,7 +373,6 @@ export default function ProductList({ navigation }: Props) {
         title: 'Inventario',
         headerRight: () => (
           <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            {/* Botón que ya tenías: + ⏱ +5d */}
             <TouchableOpacity
               accessibilityLabel="Agregar producto"
               onPress={() => setShowAdd(true)}
@@ -386,7 +387,6 @@ export default function ProductList({ navigation }: Props) {
               <Text style={styles.smallBtnText}>⏱ +5d</Text>
             </TouchableOpacity>
 
-            {/* Nuevo botón ⚙️ para ir a Ajustes de vencimiento */}
             <TouchableOpacity
               accessibilityLabel="Ajustes de vencimiento"
               onPress={() => navigation.navigate('ExpirySettings')}
@@ -401,7 +401,7 @@ export default function ProductList({ navigation }: Props) {
     }, [fetch, navigation])
   );
 
-    const data: Array<ProductVM & { __skeleton?: boolean }> = useMemo(() => {
+  const data: Array<ProductVM & { __skeleton?: boolean }> = useMemo(() => {
     const mapped =
       (rawProducts ?? [])
         .map((p: any) => {
@@ -424,13 +424,11 @@ export default function ProductList({ navigation }: Props) {
           const nextExpiry = pickExpiry(q);
           const expiry = getExpiryInfo(nextExpiry ?? null);
 
-          // qty normalizada
           const qty =
             typeof q?.qty === 'number'
               ? q.qty
               : Number(q?.qty ?? q?.cantidad ?? q?.stock ?? 0) || 0;
 
-          // minStock normalizado (lee minStock, min_stock o stockMin)
           const minStock =
             typeof q?.minStock === 'number' && Number.isFinite(q.minStock)
               ? q.minStock
@@ -465,11 +463,9 @@ export default function ProductList({ navigation }: Props) {
         })
         .filter((it: ProductVM) => !!it.id) || [];
 
-    // Oculta los borrados
-    const filtered = mapped.filter(it => !deletedIds.has(String(it.id)));
+    const withoutDeleted = mapped.filter(it => !deletedIds.has(String(it.id)));
 
-    // Skeletons mientras carga
-    if (SKELETON_COUNT > 0 && loading && filtered.length === 0) {
+    if (SKELETON_COUNT > 0 && loading && withoutDeleted.length === 0) {
       return Array.from({ length: SKELETON_COUNT }).map((_, i) => ({
         id: `skeleton-${i}`,
         name: '',
@@ -477,16 +473,15 @@ export default function ProductList({ navigation }: Props) {
       })) as any[];
     }
 
-    // Ordenar por vencimiento (mismo criterio que ya tenías)
-    const sorted = [...filtered].sort((a, b) => {
+    const sorted = [...withoutDeleted].sort((a, b) => {
       const ea = getExpiryInfo(a.nextExpiry ?? null);
       const eb = getExpiryInfo(b.nextExpiry ?? null);
 
       const rank = (e: ReturnType<typeof getExpiryInfo>) => {
-        if (e.status === 'expired') return 0; // 1) Vencidos
-        if (e.status === 'soon') return 1;    // 2) Por vencer (hoy / ≤7 días)
-        if (e.status === 'ok') return 2;      // 3) OK
-        return 3;                             // 4) Sin fecha / inválida
+        if (e.status === 'expired') return 0;
+        if (e.status === 'soon') return 1;
+        if (e.status === 'ok') return 2;
+        return 3;
       };
 
       const ra = rank(ea);
@@ -498,9 +493,43 @@ export default function ProductList({ navigation }: Props) {
       return da - db;
     });
 
-    return sorted;
-  }, [rawProducts, loading, deletedIds]);
+    // 🔍 filtro por texto
+    const searchTrim = search.trim().toLowerCase();
+    const bySearch = searchTrim
+      ? sorted.filter(p =>
+          `${p.name} ${p.brand ?? ''} ${p.sku ?? ''}`
+            .toLowerCase()
+            .includes(searchTrim)
+        )
+      : sorted;
 
+    // 🎯 filtros rápidos
+    const byFilter = bySearch.filter(p => {
+      if (filter === 'all') return true;
+
+      const info = getExpiryInfo(p.nextExpiry ?? null);
+      const qty = Number(p.qty ?? 0);
+      const minStockNum =
+        typeof p.minStock === 'number' && Number.isFinite(p.minStock)
+          ? p.minStock
+          : 0;
+
+      switch (filter) {
+        case 'aboutToExpire':
+          return info.status === 'soon';
+        case 'expired':
+          return info.status === 'expired';
+        case 'outOfStock':
+          return qty === 0;
+        case 'lowStock':
+          return qty > 0 && minStockNum > 0 && qty <= minStockNum;
+        default:
+          return true;
+      }
+    });
+
+    return byFilter;
+  }, [rawProducts, loading, deletedIds, search, filter]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -509,46 +538,62 @@ export default function ProductList({ navigation }: Props) {
   }, [fetch]);
 
   const onDelta = useCallback(async (id: string, delta: number) => {
-    const currentRow = (data || []).find((x) => String(x.id) === String(id));
-    const currentQty = Number(currentRow?.qty ?? 0);
-    const nextQty = Math.max(0, currentQty + delta);
+  const currentRow = (data || []).find((x) => String(x.id) === String(id));
+  const currentQty = Number(currentRow?.qty ?? 0);
+  const nextQty = Math.max(0, currentQty + delta);
 
-    // Optimista
+  // 👇 minStock del producto
+  const minStock = Number(currentRow?.minStock ?? 0);
+
+  // Estado ANTES y DESPUÉS del cambio
+  const prevStatus = getStockStatus(currentQty, minStock);
+  const nextStatus = getStockStatus(nextQty, minStock);
+
+  // Actualización optimista en UI
+  setListState((prev) => {
+    const base = (Array.isArray(prev) && prev.length ? prev : rawProducts) || [];
+    return base.map((row: any) => {
+      const q = row?.props ?? row;
+      if (String(q?.id) !== String(id)) return row;
+      const newProps = { ...q, qty: nextQty };
+      return row?.props ? { ...row, props: newProps } : newProps;
+    });
+  });
+
+  try {
+    const runUpdate = pickUpdateQtyFn(app);
+    if (typeof runUpdate === 'function') {
+      await tryUpdateQtyWithPayloads(runUpdate, id, nextQty, currentRow);
+    } else if (typeof (productRepo as any)?.updateProductQty === 'function') {
+      await (productRepo as any).updateProductQty(id, nextQty);
+    } else if (typeof (productRepo as any)?.adjustStock === 'function') {
+      await (productRepo as any).adjustStock(id, nextQty - currentQty);
+    }
+
+    // 🔔 Si cambió de estado y ahora está BAJO/SIN stock, avisamos
+    if (prevStatus !== nextStatus && nextStatus !== 'ok') {
+      const statusType = nextStatus === 'none' ? 'out' : 'low';
+      void notifyStockAlert({
+        name: currentRow?.name ?? 'Producto',
+        status: statusType,
+        qty: nextQty,
+        minStock,
+      });
+    }
+  } catch (e) {
+    // Revertir si falla
     setListState((prev) => {
       const base = (Array.isArray(prev) && prev.length ? prev : rawProducts) || [];
       return base.map((row: any) => {
         const q = row?.props ?? row;
         if (String(q?.id) !== String(id)) return row;
-        const newProps = { ...q, qty: nextQty };
+        const newProps = { ...q, qty: currentQty };
         return row?.props ? { ...row, props: newProps } : newProps;
       });
     });
-
-    try {
-      const runUpdate = pickUpdateQtyFn(app);
-      if (typeof runUpdate === 'function') {
-        await tryUpdateQtyWithPayloads(runUpdate, id, nextQty, currentRow);
-      } else if (typeof (productRepo as any)?.updateProductQty === 'function') {
-        await (productRepo as any).updateProductQty(id, nextQty);
-      } else if (typeof (productRepo as any)?.adjustStock === 'function') {
-        await (productRepo as any).adjustStock(id, nextQty - currentQty);
-      }
-      // opcional refresco
-      // await fetch();
-    } catch (e) {
-      // Revertir
-      setListState((prev) => {
-        const base = (Array.isArray(prev) && prev.length ? prev : rawProducts) || [];
-        return base.map((row: any) => {
-          const q = row?.props ?? row;
-          if (String(q?.id) !== String(id)) return row;
-          const newProps = { ...q, qty: currentQty };
-          return row?.props ? { ...row, props: newProps } : newProps;
-        });
-      });
-      Alert.alert('No se pudo ajustar el stock', 'Se revirtió el cambio local.');
-    }
-  }, [app, data, rawProducts]);
+    Alert.alert('No se pudo ajustar el stock', 'Se revirtió el cambio local.');
+  }
+}, [app, data, rawProducts]);
 
   // Chips para fecha (crear)
   const setExpiryOffset = useCallback((days: number) => {
@@ -599,14 +644,13 @@ export default function ProductList({ navigation }: Props) {
   }, []);
 
   // Guardar producto nuevo
-const onSaveNewProduct = useCallback(async () => {
+  const onSaveNewProduct = useCallback(async () => {
   const name = (newName || '').trim();
   if (!name) {
     Alert.alert('Falta el nombre', 'Escribe un nombre para el producto.');
     return;
   }
 
-  // Validar fecha si viene
   const expiryTrim = newExpiry?.trim() || '';
   if (expiryTrim && !isValidYMD(expiryTrim)) {
     Alert.alert(
@@ -653,17 +697,24 @@ const onSaveNewProduct = useCallback(async () => {
     }
 
     setShowAdd(false);
-    // Dejamos valores “amigables” para el siguiente alta
     setNewName('');
     setNewBrand('');
     setNewSku('');
     setNewQty('0');
-    setNewMinStock('3');       // 👈 vuelve al default útil en vez de '0'
+    setNewMinStock('3');
     setNewExpiry('');
     setPhotoUri(null);
 
     Alert.alert('Listo', 'El producto se creó correctamente.');
+
     await fetch();
+
+    // 🔔 Recalcular notificaciones de vencimiento con el producto nuevo
+    try {
+      await refreshExpiryNotifications();
+    } catch (err) {
+      console.log('[ProductList] error al refrescar notificaciones (nuevo)', err);
+    }
   } catch (e) {
     console.log('[ProductList] crear error', e);
     Alert.alert('Error', 'No se pudo crear el producto.');
@@ -673,34 +724,30 @@ const onSaveNewProduct = useCallback(async () => {
 }, [app, newName, newBrand, newSku, newQty, newMinStock, newExpiry, photoUri, fetch]);
 
 
-// Abrir editor con datos del item
-const openEdit = useCallback((item: ProductVM) => {
-  console.log('[ProductList] openEdit', item?.id); // 👈 solo para depurar, se puede borrar luego
+  // Abrir editor con datos del item
+  const openEdit = useCallback((item: ProductVM) => {
 
-  setEditId(item.id);
-  setEditName(item.name || '');
-  setEditBrand(item.brand || '');
-  setEditSku(item.sku || '');
-  setEditQty(
-    Number.isFinite(Number(item.qty))
-      ? String(item.qty)
-      : '0'
-  );
-  setEditMinStock(
-    item.minStock != null && Number.isFinite(Number(item.minStock))
-      ? String(item.minStock)
-      : '0'
-  );
-  setEditExpiry(item.nextExpiry || '');
-  setEditPhotoUri(item.photoUrl || null);
-
-  // 👇 MUY IMPORTANTE: esto es lo que muestra el modal
-  setShowEdit(true);
-}, []);
-
+    setEditId(item.id);
+    setEditName(item.name || '');
+    setEditBrand(item.brand || '');
+    setEditSku(item.sku || '');
+    setEditQty(
+      Number.isFinite(Number(item.qty))
+        ? String(item.qty)
+        : '0'
+    );
+    setEditMinStock(
+      item.minStock != null && Number.isFinite(Number(item.minStock))
+        ? String(item.minStock)
+        : '0'
+    );
+    setEditExpiry(item.nextExpiry || '');
+    setEditPhotoUri(item.photoUrl || null);
+    setShowEdit(true);
+  }, []);
 
   // Guardar cambios (editar)
-const onSaveEdit = useCallback(async () => {
+  const onSaveEdit = useCallback(async () => {
   const id = editId;
   const name = (editName || '').trim();
   if (!id) return;
@@ -726,6 +773,13 @@ const onSaveEdit = useCallback(async () => {
     0,
     Number.isFinite(Number(editMinStock)) ? Number(editMinStock) : 0
   );
+
+    // 👇 Buscar el producto actual para saber el estado "antes"
+  const prevRow = (data || []).find((x) => String(x.id) === String(id));
+  const prevQty = Number(prevRow?.qty ?? 0);
+  const prevMinStock = Number(prevRow?.minStock ?? 0);
+  const prevStatus = getStockStatus(prevQty, prevMinStock);
+  const nextStatus = getStockStatus(qtyNum, minStockNum);
 
   const payload = {
     id,
@@ -763,7 +817,19 @@ const onSaveEdit = useCallback(async () => {
 
     setShowEdit(false);
     Alert.alert('Listo', 'Los cambios se guardaron correctamente.');
+
     await fetch();
+
+    // 🔔 Si el estado cambió y ahora está bajo/sin stock, avisar
+    if (prevStatus !== nextStatus && nextStatus !== 'ok') {
+      const statusType = nextStatus === 'none' ? 'out' : 'low';
+      void notifyStockAlert({
+        name,
+        status: statusType,
+        qty: qtyNum,
+        minStock: minStockNum,
+      });
+    }
   } catch (e) {
     console.log('[ProductList] update error', e);
     Alert.alert('Error', 'No se pudo guardar el producto.');
@@ -772,6 +838,7 @@ const onSaveEdit = useCallback(async () => {
   }
 }, [
   app,
+  data,
   editId,
   editName,
   editBrand,
@@ -788,30 +855,24 @@ const onSaveEdit = useCallback(async () => {
     try {
       setDeleting(true);
 
-      // 1) Borrado persistente directo en tu repo
       if (typeof (productRepo as any)?.remove === 'function') {
         await (productRepo as any).remove(id);
       } else {
-        // Si por alguna razón no existe, avisamos
         throw new Error('productRepo.remove no disponible');
       }
 
-      // 2) Overlay inmediato
       setDeletedIds(prev => {
         const s = new Set(prev);
         s.add(String(id));
         return s;
       });
 
-      // 3) Limpieza local de listState
       setListState(prev => {
         if (!Array.isArray(prev) || prev.length === 0) return prev;
         return prev.filter((r: any) => String((r?.props ?? r)?.id) !== String(id));
       });
 
       setShowEdit(false);
-
-      // 4) Refresco desde DB para alinear
       await fetch();
     } catch (e) {
       console.log('[ProductList] delete error', e);
@@ -828,543 +889,645 @@ const onSaveEdit = useCallback(async () => {
     ]);
   }, [onDelete]);
 
+  const renderItem = ({ item }: { item: any }) => {
+    if (item.__skeleton) return <SkeletonCard />;
 
-const renderItem = ({ item }: { item: any }) => {
-  if (item.__skeleton) return <SkeletonCard />;
+    const expiry = getExpiryInfo(item.nextExpiry ?? null);
 
-  // Info de vencimiento
-  const expiry = getExpiryInfo(item.nextExpiry ?? null);
+    const qty = Number(item.qty ?? 0);
+    const minStock =
+      typeof item.minStock === 'number' && Number.isFinite(item.minStock)
+        ? item.minStock
+        : 0;
 
-  const qty = Number(item.qty ?? 0);
-  const minStock =
-    typeof item.minStock === 'number' && Number.isFinite(item.minStock)
-      ? item.minStock
-      : 0;
+    const isOutOfStock = qty === 0;
+    const isLowStock = !isOutOfStock && minStock > 0 && qty <= minStock;
 
-  const isOutOfStock = qty === 0;
-  const isLowStock = !isOutOfStock && minStock > 0 && qty <= minStock;
+    return (
+      <Pressable
+        onPress={() => openEdit(item)}
+        onLongPress={() => openEdit(item)}
+        delayLongPress={250}
+        style={({ pressed }) => [{ opacity: pressed ? 0.92 : 1 }]}
+      >
+        <View style={styles.card}>
+          <View style={styles.row}>
+            {item.photoUrl ? (
+              <Image source={{ uri: item.photoUrl }} style={styles.thumb} />
+            ) : (
+              <View style={[styles.thumb, styles.thumbEmpty]} />
+            )}
+
+            <View style={{ width: 12 }} />
+
+            <View style={styles.mainCol}>
+              <Text style={styles.name}>{item.name}</Text>
+              <Text style={styles.meta}>
+                {[item.brand, item.category, item.sku].filter(Boolean).join(' · ') ||
+                  '—'}
+              </Text>
+
+              <View style={styles.pillRow}>
+                <View
+                  style={[
+                    styles.expiryPill,
+                    {
+                      backgroundColor: expiry.color,
+                      borderColor: expiry.color,
+                      opacity: expiry.status === 'none' ? 0.4 : 1,
+                    },
+                  ]}
+                >
+                  <Text style={styles.expiryPillText}>{expiry.label}</Text>
+                </View>
+
+                {isOutOfStock && (
+                  <View style={[styles.expiryPill, styles.lowStockPill]}>
+                    <Text style={styles.expiryPillText}>SIN STOCK</Text>
+                  </View>
+                )}
+
+                {isLowStock && (
+                  <View style={[styles.expiryPill, styles.lowStockPill]}>
+                    <Text style={styles.expiryPillText}>BAJO STOCK</Text>
+                  </View>
+                )}
+              </View>
+            </View>
+
+            <View style={styles.qtyControls}>
+              <TouchableOpacity
+                style={styles.qtyBtn}
+                onPress={() => onDelta(item.id, -1)}
+              >
+                <Text style={styles.qtyBtnText}>−</Text>
+              </TouchableOpacity>
+
+              <Text
+                style={[
+                  styles.qty,
+                  (isOutOfStock || isLowStock) && styles.qtyLow,
+                  { marginHorizontal: 8 },
+                ]}
+              >
+                {qty}
+              </Text>
+
+              <TouchableOpacity
+                style={styles.qtyBtn}
+                onPress={() => onDelta(item.id, +1)}
+              >
+                <Text style={styles.qtyBtnText}>＋</Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.moreBtn}
+                onPress={() => openEdit(item)}
+                accessibilityLabel="Editar producto"
+              >
+                <Text style={styles.moreBtnText}>⋮</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Pressable>
+    );
+  };
+
+    const EmptyState = () => (
+    <View style={styles.emptyWrap}>
+      <Text style={styles.emptyTitle}>No hay productos</Text>
+      <Text style={styles.emptySubtitle}>Agrega el primero para comenzar.</Text>
+      <TouchableOpacity
+        style={[styles.addButton, styles.primary]}
+        onPress={() => setShowAdd(true)}
+      >
+        <Text style={styles.addButtonText}>Agregar producto</Text>
+      </TouchableOpacity>
+    </View>
+  );
 
   return (
-    <Pressable
-      onPress={() => openEdit(item)}
-      onLongPress={() => openEdit(item)}
-      delayLongPress={250}
-      style={({ pressed }) => [{ opacity: pressed ? 0.92 : 1 }]}
-    >
-      <View style={styles.card}>
-        <View style={styles.row}>
-          {item.photoUrl ? (
-            <Image source={{ uri: item.photoUrl }} style={styles.thumb} />
-          ) : (
-            <View style={[styles.thumb, styles.thumbEmpty]} />
-          )}
-
-          <View style={{ width: 12 }} />
-
-          {/* Columna central con texto + pills */}
-          <View style={styles.mainCol}>
-            <Text style={styles.name}>{item.name}</Text>
-            <Text style={styles.meta}>
-              {[item.brand, item.category, item.sku].filter(Boolean).join(' · ') ||
-                '—'}
-            </Text>
-
-            <View style={styles.pillRow}>
-              {/* Vencimiento */}
-              <View
-                style={[
-                  styles.expiryPill,
-                  {
-                    backgroundColor: expiry.color,
-                    borderColor: expiry.color,
-                    opacity: expiry.status === 'none' ? 0.4 : 1,
-                  },
-                ]}
-              >
-                <Text style={styles.expiryPillText}>{expiry.label}</Text>
-              </View>
-
-              {/* SIN STOCK */}
-              {isOutOfStock && (
-                <View style={[styles.expiryPill, styles.lowStockPill]}>
-                  <Text style={styles.expiryPillText}>SIN STOCK</Text>
-                </View>
-              )}
-
-              {/* BAJO STOCK */}
-              {isLowStock && (
-                <View style={[styles.expiryPill, styles.lowStockPill]}>
-                  <Text style={styles.expiryPillText}>BAJO STOCK</Text>
-                </View>
-              )}
-            </View>
-          </View>
-
-          <View style={styles.qtyControls}>
-            <TouchableOpacity
-              style={styles.qtyBtn}
-              onPress={() => onDelta(item.id, -1)}
-            >
-              <Text style={styles.qtyBtnText}>−</Text>
-            </TouchableOpacity>
-
-            <Text
-              style={[
-                styles.qty,
-                (isOutOfStock || isLowStock) && styles.qtyLow,
-                { marginHorizontal: 8 },
-              ]}
-            >
-              {qty}
-            </Text>
-
-            <TouchableOpacity
-              style={styles.qtyBtn}
-              onPress={() => onDelta(item.id, +1)}
-            >
-              <Text style={styles.qtyBtnText}>＋</Text>
-            </TouchableOpacity>
-
-            {/* Botón "⋮" => abre directamente el editor */}
-            <TouchableOpacity
-              style={styles.moreBtn}
-              onPress={() => openEdit(item)}
-              accessibilityLabel="Editar producto"
-            >
-              <Text style={styles.moreBtnText}>⋮</Text>
-            </TouchableOpacity>
-          </View>
+    <View style={styles.container}>
+      {/* 🔍 Buscador + botón limpiar */}
+      <View style={styles.searchBarContainer}>
+        <View style={styles.searchInputWrapper}>
+          <TextInput
+            value={search}
+            onChangeText={setSearch}
+            placeholder="Buscar por nombre, marca o SKU"
+            placeholderTextColor="rgba(255,255,255,0.5)"
+            style={styles.searchInput}
+            autoCorrect={false}
+          />
         </View>
+
+        {!!search && (
+          <TouchableOpacity onPress={() => setSearch('')}>
+            <Text style={styles.clearSearchText}>Limpiar</Text>
+          </TouchableOpacity>
+        )}
       </View>
-    </Pressable>
-  );
-};
 
-const EmptyState = () => (
-  <View style={styles.emptyWrap}>
-    <Text style={styles.emptyTitle}>No hay productos</Text>
-    <Text style={styles.emptySubtitle}>Agrega el primero para comenzar.</Text>
-    <TouchableOpacity
-      style={[styles.addButton, styles.primary]}
-      onPress={() => setShowAdd(true)}
-    >
-      <Text style={styles.addButtonText}>Agregar producto</Text>
-    </TouchableOpacity>
-  </View>
-);
-
-return (
-  <View style={styles.container}>
-    <FlatList
-      data={data}
-      keyExtractor={(it) => String(it.id)}
-      renderItem={renderItem}
-      refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-      }
-      ListEmptyComponent={!loading ? <EmptyState /> : null}
-      contentContainerStyle={
-        data.length === 0
-          ? { flex: 1, justifyContent: 'center', alignItems: 'center' }
-          : undefined
-      }
-    />
-
-    {/* FAB */}
-    <TouchableOpacity
-      style={styles.fab}
-      onPress={() => setShowAdd(true)}
-      accessibilityLabel="Nuevo producto"
-    >
-      <Text style={styles.fabIcon}>＋</Text>
-    </TouchableOpacity>
-
-    {/* Modal: alta NUEVO producto */}
-    <Modal
-      visible={showAdd}
-      transparent
-      animationType="fade"
-      onRequestClose={() => setShowAdd(false)}
-    >
-      <View style={styles.modal}>
-        <View style={styles.modalCard}>
-          <Text style={styles.modalTitle}>Nuevo producto</Text>
-
-          <ScrollView
-            keyboardShouldPersistTaps="handled"
-            contentContainerStyle={{ paddingBottom: 8 }}
+      {/* 🎯 Filtros rápidos */}
+      <View style={styles.filterChipsRow}>
+        <TouchableOpacity
+          style={[
+            styles.filterChip,
+            filter === 'all' && styles.filterChipActive,
+          ]}
+          onPress={() => setFilter('all')}
+        >
+          <Text
+            style={[
+              styles.filterChipText,
+              filter === 'all' && styles.filterChipTextActive,
+            ]}
           >
-            {/* Foto */}
-            <View style={styles.photoRow}>
-              <View style={styles.photoPreviewWrap}>
-                {photoUri ? (
-                  <Image
-                    source={{ uri: photoUri }}
-                    style={styles.photoPreview}
-                  />
-                ) : (
-                  <View style={[styles.photoPreview, styles.thumbEmpty]} />
-                )}
-              </View>
-              <View style={{ flex: 1 }}>
-                <View style={{ flexDirection: 'row' }}>
-                  <TouchableOpacity
-                    style={[styles.smallChip, styles.secondary]}
-                    onPress={() => pickFromLibrary(setPhotoUri)}
-                  >
-                    <Text style={styles.smallChipText}>Galería</Text>
-                  </TouchableOpacity>
-                  <View style={{ width: 8 }} />
-                  <TouchableOpacity
-                    style={[styles.smallChip, styles.secondary]}
-                    onPress={() => takePhoto(setPhotoUri)}
-                  >
-                    <Text style={styles.smallChipText}>Cámara</Text>
-                  </TouchableOpacity>
+            Todos
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[
+            styles.filterChip,
+            filter === 'aboutToExpire' && styles.filterChipActive,
+          ]}
+          onPress={() => setFilter('aboutToExpire')}
+        >
+          <Text
+            style={[
+              styles.filterChipText,
+              filter === 'aboutToExpire' && styles.filterChipTextActive,
+            ]}
+          >
+            Por vencer
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[
+            styles.filterChip,
+            filter === 'expired' && styles.filterChipActive,
+          ]}
+          onPress={() => setFilter('expired')}
+        >
+          <Text
+            style={[
+              styles.filterChipText,
+              filter === 'expired' && styles.filterChipTextActive,
+            ]}
+          >
+            Vencidos
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[
+            styles.filterChip,
+            filter === 'outOfStock' && styles.filterChipActive,
+          ]}
+          onPress={() => setFilter('outOfStock')}
+        >
+          <Text
+            style={[
+              styles.filterChipText,
+              filter === 'outOfStock' && styles.filterChipTextActive,
+            ]}
+          >
+            Sin stock
+          </Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          style={[
+            styles.filterChip,
+            filter === 'lowStock' && styles.filterChipActive,
+          ]}
+          onPress={() => setFilter('lowStock')}
+        >
+          <Text
+            style={[
+              styles.filterChipText,
+              filter === 'lowStock' && styles.filterChipTextActive,
+            ]}
+          >
+            Bajo stock
+          </Text>
+        </TouchableOpacity>
+      </View>
+
+      {/* Lista principal */}
+      <FlatList
+        data={data}
+        keyExtractor={(it) => String(it.id)}
+        renderItem={renderItem}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+        }
+        ListEmptyComponent={!loading ? <EmptyState /> : null}
+        contentContainerStyle={
+          data.length === 0
+            ? { flex: 1, justifyContent: 'center', alignItems: 'center' }
+            : undefined
+        }
+      />
+
+      {/* FAB */}
+      <TouchableOpacity
+        style={styles.fab}
+        onPress={() => setShowAdd(true)}
+        accessibilityLabel="Nuevo producto"
+      >
+        <Text style={styles.fabIcon}>＋</Text>
+      </TouchableOpacity>
+
+      {/* Modal: alta NUEVO producto */}
+      <Modal
+        visible={showAdd}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowAdd(false)}
+      >
+        <View style={styles.modal}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Nuevo producto</Text>
+
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{ paddingBottom: 8 }}
+            >
+              {/* Foto */}
+              <View style={styles.photoRow}>
+                <View style={styles.photoPreviewWrap}>
+                  {photoUri ? (
+                    <Image
+                      source={{ uri: photoUri }}
+                      style={styles.photoPreview}
+                    />
+                  ) : (
+                    <View style={[styles.photoPreview, styles.thumbEmpty]} />
+                  )}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: 'row' }}>
+                    <TouchableOpacity
+                      style={[styles.smallChip, styles.secondary]}
+                      onPress={() => pickFromLibrary(setPhotoUri)}
+                    >
+                      <Text style={styles.smallChipText}>Galería</Text>
+                    </TouchableOpacity>
+                    <View style={{ width: 8 }} />
+                    <TouchableOpacity
+                      style={[styles.smallChip, styles.secondary]}
+                      onPress={() => takePhoto(setPhotoUri)}
+                    >
+                      <Text style={styles.smallChipText}>Cámara</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
               </View>
-            </View>
 
-            {/* Campos - NUEVO PRODUCTO */}
-            <View style={styles.fieldGroup}>
-              <Text style={styles.fieldLabel}>Nombre</Text>
-              <TextInput
-                placeholder="Ej: Cerveza IPA"
-                value={newName}
-                onChangeText={setNewName}
-                autoFocus
-                style={styles.input}
-                placeholderTextColor="rgba(255,255,255,0.5)"
-              />
-            </View>
-
-            <View style={styles.fieldGroup}>
-              <Text style={styles.fieldLabel}>Marca</Text>
-              <TextInput
-                placeholder="Ej: Kunstmann"
-                value={newBrand}
-                onChangeText={setNewBrand}
-                style={styles.input}
-                placeholderTextColor="rgba(255,255,255,0.5)"
-              />
-            </View>
-
-            <View style={styles.fieldGroup}>
-              <Text style={styles.fieldLabel}>SKU (opcional)</Text>
-              <Text style={styles.fieldHint}>
-                Código, código de barras o identificador interno
-              </Text>
-              <TextInput
-                placeholder="Ej: SKU-00123"
-                value={newSku}
-                onChangeText={setNewSku}
-                autoCapitalize="characters"
-                style={styles.input}
-                placeholderTextColor="rgba(255,255,255,0.5)"
-              />
-            </View>
-
-            <View style={styles.fieldGroup}>
-              <Text style={styles.fieldLabel}>Stock inicial</Text>
-              <Text style={styles.fieldHint}>
-                Unidades que tienes ahora mismo
-              </Text>
-              <TextInput
-                placeholder="Ej: 12"
-                value={newQty}
-                onChangeText={setNewQty}
-                keyboardType="numeric"
-                style={styles.input}
-                placeholderTextColor="rgba(255,255,255,0.5)"
-              />
-            </View>
-
-            <View style={styles.fieldGroup}>
-              <Text style={styles.fieldLabel}>Stock mínimo (bajo stock)</Text>
-              <Text style={styles.fieldHint}>
-                Solo para mostrar la etiqueta BAJO STOCK en la lista
-              </Text>
-              <TextInput
-                placeholder="Ej: 3 (opcional)"
-                value={newMinStock}
-                onChangeText={setNewMinStock}
-                keyboardType="numeric"
-                style={styles.input}
-                placeholderTextColor="rgba(255,255,255,0.5)"
-              />
-            </View>
-
-            <View style={styles.fieldGroup}>
-              <Text style={styles.fieldLabel}>Fecha de vencimiento</Text>
-              <Text style={styles.fieldHint}>Formato AAAA-MM-DD</Text>
-              <TextInput
-                placeholder="Ej: 2024-12-31"
-                value={newExpiry}
-                onChangeText={setNewExpiry}
-                style={styles.input}
-                placeholderTextColor="rgba(255,255,255,0.5)"
-              />
-            </View>
-
-            <View style={{ flexDirection: 'row', marginBottom: 8 }}>
-              <TouchableOpacity
-                style={[styles.smallChip, styles.secondary]}
-                onPress={() => setExpiryOffset(0)}
-              >
-                <Text style={styles.smallChipText}>Hoy</Text>
-              </TouchableOpacity>
-              <View style={{ width: 8 }} />
-              <TouchableOpacity
-                style={[styles.smallChip, styles.secondary]}
-                onPress={() => setExpiryOffset(7)}
-              >
-                <Text style={styles.smallChipText}>+7d</Text>
-              </TouchableOpacity>
-              <View style={{ width: 8 }} />
-              <TouchableOpacity
-                style={[styles.smallChip, styles.secondary]}
-                onPress={() => setExpiryOffset(30)}
-              >
-                <Text style={styles.smallChipText}>+30d</Text>
-              </TouchableOpacity>
-              <View style={{ width: 8 }} />
-              <TouchableOpacity
-                style={[styles.smallChip, styles.secondary]}
-                onPress={() => setNewExpiry('')}
-              >
-                <Text style={styles.smallChipText}>Limpiar</Text>
-              </TouchableOpacity>
-            </View>
-          </ScrollView>
-
-          {/* Acciones NUEVO producto */}
-          <View
-            style={[styles.modalActions, { justifyContent: 'flex-end' }]}
-          >
-            <TouchableOpacity
-              onPress={() => setShowAdd(false)}
-              style={[styles.addButton, styles.secondary, { marginRight: 8 }]}
-              disabled={saving}
-            >
-              <Text style={styles.addButtonText}>Cancelar</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              onPress={onSaveNewProduct}
-              style={[styles.addButton, styles.primary]}
-              disabled={saving}
-            >
-              <Text style={styles.addButtonText}>
-                {saving ? 'Guardando…' : 'Guardar'}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      </View>
-    </Modal>
-
-    {/* Modal: edición producto */}
-    <Modal
-      visible={showEdit}
-      transparent
-      animationType="fade"
-      onRequestClose={() => setShowEdit(false)}
-    >
-      <View style={styles.modal}>
-        <View style={styles.modalCard}>
-          <Text style={styles.modalTitle}>Editar producto</Text>
-
-          <ScrollView
-            keyboardShouldPersistTaps="handled"
-            contentContainerStyle={{ paddingBottom: 8 }}
-          >
-            {/* Foto (edición) */}
-            <View style={styles.photoRow}>
-              <View style={styles.photoPreviewWrap}>
-                {editPhotoUri ? (
-                  <Image
-                    source={{ uri: editPhotoUri }}
-                    style={styles.photoPreview}
-                  />
-                ) : (
-                  <View style={[styles.photoPreview, styles.thumbEmpty]} />
-                )}
+              {/* Campos - NUEVO PRODUCTO */}
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Nombre</Text>
+                <TextInput
+                  placeholder="Ej: Cerveza IPA"
+                  value={newName}
+                  onChangeText={setNewName}
+                  autoFocus
+                  style={styles.input}
+                  placeholderTextColor="rgba(255,255,255,0.5)"
+                />
               </View>
-              <View style={{ flex: 1 }}>
-                <View style={{ flexDirection: 'row' }}>
-                  <TouchableOpacity
-                    style={[styles.smallChip, styles.secondary]}
-                    onPress={() => pickFromLibrary(setEditPhotoUri)}
-                  >
-                    <Text style={styles.smallChipText}>Galería</Text>
-                  </TouchableOpacity>
-                  <View style={{ width: 8 }} />
-                  <TouchableOpacity
-                    style={[styles.smallChip, styles.secondary]}
-                    onPress={() => takePhoto(setEditPhotoUri)}
-                  >
-                    <Text style={styles.smallChipText}>Cámara</Text>
-                  </TouchableOpacity>
-                </View>
+
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Marca</Text>
+                <TextInput
+                  placeholder="Ej: Kunstmann"
+                  value={newBrand}
+                  onChangeText={setNewBrand}
+                  style={styles.input}
+                  placeholderTextColor="rgba(255,255,255,0.5)"
+                />
               </View>
-            </View>
 
-            {/* Campos - EDITAR PRODUCTO */}
-            <View style={styles.fieldGroup}>
-              <Text style={styles.fieldLabel}>Nombre</Text>
-              <TextInput
-                placeholder="Ej: Cerveza IPA"
-                value={editName}
-                onChangeText={setEditName}
-                style={styles.input}
-                placeholderTextColor="rgba(255,255,255,0.5)"
-              />
-            </View>
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>SKU (opcional)</Text>
+                <Text style={styles.fieldHint}>
+                  Código, código de barras o identificador interno
+                </Text>
+                <TextInput
+                  placeholder="Ej: SKU-00123"
+                  value={newSku}
+                  onChangeText={setNewSku}
+                  autoCapitalize="characters"
+                  style={styles.input}
+                  placeholderTextColor="rgba(255,255,255,0.5)"
+                />
+              </View>
 
-            <View style={styles.fieldGroup}>
-              <Text style={styles.fieldLabel}>Marca</Text>
-              <TextInput
-                placeholder="Ej: Kunstmann"
-                value={editBrand}
-                onChangeText={setEditBrand}
-                style={styles.input}
-                placeholderTextColor="rgba(255,255,255,0.5)"
-              />
-            </View>
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Stock inicial</Text>
+                <Text style={styles.fieldHint}>
+                  Unidades que tienes ahora mismo
+                </Text>
+                <TextInput
+                  placeholder="Ej: 12"
+                  value={newQty}
+                  onChangeText={setNewQty}
+                  keyboardType="numeric"
+                  style={styles.input}
+                  placeholderTextColor="rgba(255,255,255,0.5)"
+                />
+              </View>
 
-            <View style={styles.fieldGroup}>
-              <Text style={styles.fieldLabel}>SKU (opcional)</Text>
-              <Text style={styles.fieldHint}>
-                Código, código de barras o identificador interno
-              </Text>
-              <TextInput
-                placeholder="Ej: SKU-00123"
-                value={editSku}
-                onChangeText={setEditSku}
-                autoCapitalize="characters"
-                style={styles.input}
-                placeholderTextColor="rgba(255,255,255,0.5)"
-              />
-            </View>
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Stock mínimo (bajo stock)</Text>
+                <Text style={styles.fieldHint}>
+                  Solo para mostrar la etiqueta BAJO STOCK en la lista
+                </Text>
+                <TextInput
+                  placeholder="Ej: 3 (opcional)"
+                  value={newMinStock}
+                  onChangeText={setNewMinStock}
+                  keyboardType="numeric"
+                  style={styles.input}
+                  placeholderTextColor="rgba(255,255,255,0.5)"
+                />
+              </View>
 
-            <View style={styles.fieldGroup}>
-              <Text style={styles.fieldLabel}>Stock actual</Text>
-              <Text style={styles.fieldHint}>
-                Unidades que tienes ahora mismo
-              </Text>
-              <TextInput
-                placeholder="Ej: 12"
-                value={editQty}
-                onChangeText={setEditQty}
-                keyboardType="numeric"
-                style={styles.input}
-                placeholderTextColor="rgba(255,255,255,0.5)"
-              />
-            </View>
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Fecha de vencimiento</Text>
+                <Text style={styles.fieldHint}>Formato AAAA-MM-DD</Text>
+                <TextInput
+                  placeholder="Ej: 2024-12-31"
+                  value={newExpiry}
+                  onChangeText={setNewExpiry}
+                  style={styles.input}
+                  placeholderTextColor="rgba(255,255,255,0.5)"
+                />
+              </View>
 
-            <View style={styles.fieldGroup}>
-              <Text style={styles.fieldLabel}>Stock mínimo (bajo stock)</Text>
-              <Text style={styles.fieldHint}>
-                Solo para mostrar la etiqueta BAJO STOCK en la lista
-              </Text>
-              <TextInput
-                placeholder="Ej: 3 (opcional)"
-                value={editMinStock}
-                onChangeText={setEditMinStock}
-                keyboardType="numeric"
-                style={styles.input}
-                placeholderTextColor="rgba(255,255,255,0.5)"
-              />
-            </View>
+              <View style={{ flexDirection: 'row', marginBottom: 8 }}>
+                <TouchableOpacity
+                  style={[styles.smallChip, styles.secondary]}
+                  onPress={() => setExpiryOffset(0)}
+                >
+                  <Text style={styles.smallChipText}>Hoy</Text>
+                </TouchableOpacity>
+                <View style={{ width: 8 }} />
+                <TouchableOpacity
+                  style={[styles.smallChip, styles.secondary]}
+                  onPress={() => setExpiryOffset(7)}
+                >
+                  <Text style={styles.smallChipText}>+7d</Text>
+                </TouchableOpacity>
+                <View style={{ width: 8 }} />
+                <TouchableOpacity
+                  style={[styles.smallChip, styles.secondary]}
+                  onPress={() => setExpiryOffset(30)}
+                >
+                  <Text style={styles.smallChipText}>+30d</Text>
+                </TouchableOpacity>
+                <View style={{ width: 8 }} />
+                <TouchableOpacity
+                  style={[styles.smallChip, styles.secondary]}
+                  onPress={() => setNewExpiry('')}
+                >
+                  <Text style={styles.smallChipText}>Limpiar</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
 
-            <View style={styles.fieldGroup}>
-              <Text style={styles.fieldLabel}>Fecha de vencimiento</Text>
-              <Text style={styles.fieldHint}>Formato AAAA-MM-DD</Text>
-              <TextInput
-                placeholder="Ej: 2024-12-31"
-                value={editExpiry}
-                onChangeText={setEditExpiry}
-                style={styles.input}
-                placeholderTextColor="rgba(255,255,255,0.5)"
-              />
-            </View>
-
-            <View style={{ flexDirection: 'row', marginBottom: 8 }}>
-              <TouchableOpacity
-                style={[styles.smallChip, styles.secondary]}
-                onPress={() => setEditExpiryOffset(0)}
-              >
-                <Text style={styles.smallChipText}>Hoy</Text>
-              </TouchableOpacity>
-              <View style={{ width: 8 }} />
-              <TouchableOpacity
-                style={[styles.smallChip, styles.secondary]}
-                onPress={() => setEditExpiryOffset(7)}
-              >
-                <Text style={styles.smallChipText}>+7d</Text>
-              </TouchableOpacity>
-              <View style={{ width: 8 }} />
-              <TouchableOpacity
-                style={[styles.smallChip, styles.secondary]}
-                onPress={() => setEditExpiryOffset(30)}
-              >
-                <Text style={styles.smallChipText}>+30d</Text>
-              </TouchableOpacity>
-              <View style={{ width: 8 }} />
-              <TouchableOpacity
-                style={[styles.smallChip, styles.secondary]}
-                onPress={() => setEditExpiry('')}
-              >
-                <Text style={styles.smallChipText}>Limpiar</Text>
-              </TouchableOpacity>
-            </View>
-          </ScrollView>
-
-          {/* Acciones edición */}
-          <View
-            style={[styles.modalActions, { justifyContent: 'space-between' }]}
-          >
-            <TouchableOpacity
-              onPress={() => editId && confirmDelete(editId)}
-              style={[
-                styles.addButton,
-                {
-                  borderColor: 'rgba(255,100,100,0.5)',
-                  backgroundColor: 'rgba(255,80,80,0.18)',
-                },
-              ]}
-              disabled={deleting}
+            {/* Acciones NUEVO producto */}
+            <View
+              style={[styles.modalActions, { justifyContent: 'flex-end' }]}
             >
-              <Text style={styles.addButtonText}>Eliminar</Text>
-            </TouchableOpacity>
-
-            <View style={{ flexDirection: 'row' }}>
               <TouchableOpacity
-                onPress={() => setShowEdit(false)}
-                style={[
-                  styles.addButton,
-                  styles.secondary,
-                  { marginRight: 8 },
-                ]}
-                disabled={updating}
+                onPress={() => setShowAdd(false)}
+                style={[styles.addButton, styles.secondary, { marginRight: 8 }]}
+                disabled={saving}
               >
                 <Text style={styles.addButtonText}>Cancelar</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                onPress={onSaveEdit}
+                onPress={onSaveNewProduct}
                 style={[styles.addButton, styles.primary]}
-                disabled={updating}
+                disabled={saving}
               >
                 <Text style={styles.addButtonText}>
-                  {updating ? 'Guardando…' : 'Guardar'}
+                  {saving ? 'Guardando…' : 'Guardar'}
                 </Text>
               </TouchableOpacity>
             </View>
           </View>
         </View>
-      </View>
-    </Modal>
-  </View>
-);
+      </Modal>
+
+      {/* Modal: edición producto */}
+      <Modal
+        visible={showEdit}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowEdit(false)}
+      >
+        <View style={styles.modal}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Editar producto</Text>
+
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              contentContainerStyle={{ paddingBottom: 8 }}
+            >
+              {/* Foto (edición) */}
+              <View style={styles.photoRow}>
+                <View style={styles.photoPreviewWrap}>
+                  {editPhotoUri ? (
+                    <Image
+                      source={{ uri: editPhotoUri }}
+                      style={styles.photoPreview}
+                    />
+                  ) : (
+                    <View style={[styles.photoPreview, styles.thumbEmpty]} />
+                  )}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <View style={{ flexDirection: 'row' }}>
+                    <TouchableOpacity
+                      style={[styles.smallChip, styles.secondary]}
+                      onPress={() => pickFromLibrary(setEditPhotoUri)}
+                    >
+                      <Text style={styles.smallChipText}>Galería</Text>
+                    </TouchableOpacity>
+                    <View style={{ width: 8 }} />
+                    <TouchableOpacity
+                      style={[styles.smallChip, styles.secondary]}
+                      onPress={() => takePhoto(setEditPhotoUri)}
+                    >
+                      <Text style={styles.smallChipText}>Cámara</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
+
+              {/* Campos - EDITAR PRODUCTO */}
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Nombre</Text>
+                <TextInput
+                  placeholder="Ej: Cerveza IPA"
+                  value={editName}
+                  onChangeText={setEditName}
+                  style={styles.input}
+                  placeholderTextColor="rgba(255,255,255,0.5)"
+                />
+              </View>
+
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Marca</Text>
+                <TextInput
+                  placeholder="Ej: Kunstmann"
+                  value={editBrand}
+                  onChangeText={setEditBrand}
+                  style={styles.input}
+                  placeholderTextColor="rgba(255,255,255,0.5)"
+                />
+              </View>
+
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>SKU (opcional)</Text>
+                <Text style={styles.fieldHint}>
+                  Código, código de barras o identificador interno
+                </Text>
+                <TextInput
+                  placeholder="Ej: SKU-00123"
+                  value={editSku}
+                  onChangeText={setEditSku}
+                  autoCapitalize="characters"
+                  style={styles.input}
+                  placeholderTextColor="rgba(255,255,255,0.5)"
+                />
+              </View>
+
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Stock actual</Text>
+                <Text style={styles.fieldHint}>
+                  Unidades que tienes ahora mismo
+                </Text>
+                <TextInput
+                  placeholder="Ej: 12"
+                  value={editQty}
+                  onChangeText={setEditQty}
+                  keyboardType="numeric"
+                  style={styles.input}
+                  placeholderTextColor="rgba(255,255,255,0.5)"
+                />
+              </View>
+
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Stock mínimo (bajo stock)</Text>
+                <Text style={styles.fieldHint}>
+                  Solo para mostrar la etiqueta BAJO STOCK en la lista
+                </Text>
+                <TextInput
+                  placeholder="Ej: 3 (opcional)"
+                  value={editMinStock}
+                  onChangeText={setEditMinStock}
+                  keyboardType="numeric"
+                  style={styles.input}
+                  placeholderTextColor="rgba(255,255,255,0.5)"
+                />
+              </View>
+
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Fecha de vencimiento</Text>
+                <Text style={styles.fieldHint}>Formato AAAA-MM-DD</Text>
+                <TextInput
+                  placeholder="Ej: 2024-12-31"
+                  value={editExpiry}
+                  onChangeText={setEditExpiry}
+                  style={styles.input}
+                  placeholderTextColor="rgba(255,255,255,0.5)"
+                />
+              </View>
+
+              <View style={{ flexDirection: 'row', marginBottom: 8 }}>
+                <TouchableOpacity
+                  style={[styles.smallChip, styles.secondary]}
+                  onPress={() => setEditExpiryOffset(0)}
+                >
+                  <Text style={styles.smallChipText}>Hoy</Text>
+                </TouchableOpacity>
+                <View style={{ width: 8 }} />
+                <TouchableOpacity
+                  style={[styles.smallChip, styles.secondary]}
+                  onPress={() => setEditExpiryOffset(7)}
+                >
+                  <Text style={styles.smallChipText}>+7d</Text>
+                </TouchableOpacity>
+                <View style={{ width: 8 }} />
+                <TouchableOpacity
+                  style={[styles.smallChip, styles.secondary]}
+                  onPress={() => setEditExpiryOffset(30)}
+                >
+                  <Text style={styles.smallChipText}>+30d</Text>
+                </TouchableOpacity>
+                <View style={{ width: 8 }} />
+                <TouchableOpacity
+                  style={[styles.smallChip, styles.secondary]}
+                  onPress={() => setEditExpiry('')}
+                >
+                  <Text style={styles.smallChipText}>Limpiar</Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+
+            {/* Acciones edición */}
+            <View
+              style={[styles.modalActions, { justifyContent: 'space-between' }]}
+            >
+              <TouchableOpacity
+                onPress={() => editId && confirmDelete(editId)}
+                style={[
+                  styles.addButton,
+                  {
+                    borderColor: 'rgba(255,100,100,0.5)',
+                    backgroundColor: 'rgba(255,80,80,0.18)',
+                  },
+                ]}
+                disabled={deleting}
+              >
+                <Text style={styles.addButtonText}>Eliminar</Text>
+              </TouchableOpacity>
+
+              <View style={{ flexDirection: 'row' }}>
+                <TouchableOpacity
+                  onPress={() => setShowEdit(false)}
+                  style={[
+                    styles.addButton,
+                    styles.secondary,
+                    { marginRight: 8 },
+                  ]}
+                  disabled={updating}
+                >
+                  <Text style={styles.addButtonText}>Cancelar</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={onSaveEdit}
+                  style={[styles.addButton, styles.primary]}
+                  disabled={updating}
+                >
+                  <Text style={styles.addButtonText}>
+                    {updating ? 'Guardando…' : 'Guardar'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
 }
 
 function SkeletonCard() {
@@ -1441,19 +1604,16 @@ const styles = StyleSheet.create({
     textShadowRadius: 2,
     includeFontPadding: false,
   },
-  // resaltar el número cuando no hay stock o está bajo
   qtyLow: {
     color: '#FF9AA2',
   },
 
-  // columna central con padding a la derecha
   mainCol: {
     flex: 1,
     paddingRight: 24,
     marginRight: 8,
   },
 
-  // Empty state
   emptyWrap: { alignItems: 'center' },
   emptyTitle: {
     color: '#EFFFFB',
@@ -1464,7 +1624,6 @@ const styles = StyleSheet.create({
   },
   emptySubtitle: { color: '#CFE8CF', opacity: 0.85, marginBottom: 12 },
 
-  // Botones
   addButton: {
     paddingHorizontal: 16,
     paddingVertical: Platform.OS === 'ios' ? 10 : 8,
@@ -1481,7 +1640,6 @@ const styles = StyleSheet.create({
     borderColor: 'rgba(255,255,255,0.22)',
   },
 
-  // Skeleton
   skelLine: {
     height: 10,
     borderRadius: 8,
@@ -1495,7 +1653,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.10)',
   },
 
-  // FAB
   fab: {
     position: 'absolute',
     right: 18,
@@ -1521,7 +1678,6 @@ const styles = StyleSheet.create({
     fontWeight: '800',
   },
 
-  // Modal
   modal: {
     flex: 1,
     backgroundColor: 'rgba(0,0,0,0.5)',
@@ -1543,7 +1699,6 @@ const styles = StyleSheet.create({
     letterSpacing: 0.2,
   },
 
-  // Agrupador de campo + label + hint
   fieldGroup: {
     marginBottom: 14,
   },
@@ -1568,13 +1723,12 @@ const styles = StyleSheet.create({
     paddingHorizontal: 12,
     paddingVertical: 10,
     color: 'white',
-    marginBottom: 0, // el espacio ahora lo da fieldGroup
+    marginBottom: 0,
     backgroundColor: 'rgba(255,255,255,0.06)',
   },
 
   modalActions: { flexDirection: 'row', justifyContent: 'flex-end' },
 
-  // Controles de cantidad
   qtyControls: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -1603,7 +1757,6 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
-  // fila para las pills, con ancho limitado
   pillRow: {
     flexDirection: 'row',
     marginTop: 6,
@@ -1612,7 +1765,6 @@ const styles = StyleSheet.create({
     rowGap: 4,
   },
 
-  // Pill de vencimiento / bajo stock
   expiryPill: {
     alignSelf: 'flex-start',
     paddingHorizontal: 10,
@@ -1629,13 +1781,11 @@ const styles = StyleSheet.create({
     letterSpacing: 0.3,
     includeFontPadding: false,
   },
-  // pill rojo para SIN STOCK / BAJO STOCK
   lowStockPill: {
     backgroundColor: 'rgba(248,113,113,0.22)',
     borderColor: 'rgba(248,113,113,0.65)',
   },
 
-  // Chips y foto (modales)
   smallChip: {
     paddingHorizontal: 12,
     paddingVertical: 6,
@@ -1673,7 +1823,6 @@ const styles = StyleSheet.create({
   },
   photoPreview: { width: '100%', height: '100%' },
 
-  // Botón “⋮” en cada card
   moreBtn: {
     marginLeft: 8,
     paddingHorizontal: 8,
@@ -1689,7 +1838,60 @@ const styles = StyleSheet.create({
     fontWeight: '900',
     includeFontPadding: false,
   },
-});
 
+  // Buscador + filtros
+  searchBarContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  searchInputWrapper: {
+    flex: 1,
+    borderRadius: 999,
+    backgroundColor: 'rgba(255,255,255,0.06)',
+    borderWidth: 1,
+    borderColor: 'rgba(170,230,255,0.30)',
+    paddingHorizontal: 10,
+    paddingVertical: Platform.OS === 'ios' ? 8 : 4,
+  },
+  searchInput: {
+    color: '#EFFFFB',
+    fontSize: 14,
+  },
+  clearSearchText: {
+    marginLeft: 8,
+    color: '#9FE8FF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+
+  filterChipsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    columnGap: 6,
+    rowGap: 6,
+    marginBottom: 8,
+  },
+  filterChip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(170,230,255,0.25)',
+    backgroundColor: 'rgba(255,255,255,0.03)',
+  },
+  filterChipActive: {
+    backgroundColor: 'rgba(5,168,109,0.25)',
+    borderColor: 'rgba(5,168,109,0.8)',
+  },
+  filterChipText: {
+    color: '#CFE8FF',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  filterChipTextActive: {
+    color: '#EFFFFB',
+  },
+});
 
 export {};

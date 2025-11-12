@@ -10,7 +10,10 @@ import {
 } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useTheme } from '../theme/ThemeProvider';
-import { getExpiryWarningDays, setExpiryWarningDays } from '../settings/expirySettings';
+import {
+  getExpiryWarningDays,
+  setExpiryWarningDays,
+} from '../settings/expirySettings';
 import { refreshExpiryNotifications } from '../notifications';
 
 type Props = NativeStackScreenProps<any>;
@@ -27,7 +30,7 @@ export default function ExpirySettingsScreen({ navigation }: Props) {
     (async () => {
       try {
         const current = await getExpiryWarningDays();
-        setDays(current);
+        setDays(current ?? 7);
       } catch {
         // fallback 7
         setDays(7);
@@ -38,9 +41,10 @@ export default function ExpirySettingsScreen({ navigation }: Props) {
   }, [navigation]);
 
   const adjustDays = useCallback((delta: number) => {
-    setDays((prev) => {
-      const next = Math.min(60, Math.max(1, prev + delta));
-      return next;
+    setDays(prev => {
+      const next = prev + delta;
+      // rango permitido 1–60
+      return Math.min(60, Math.max(1, next));
     });
   }, []);
 
@@ -50,10 +54,13 @@ export default function ExpirySettingsScreen({ navigation }: Props) {
       await setExpiryWarningDays(days);
       // reprogramar notificaciones con el nuevo umbral
       await refreshExpiryNotifications();
-      Alert.alert('Guardado', `Te avisaré ${days} día(s) antes de que venzan los productos.`);
+      Alert.alert(
+        'Guardado',
+        `Te avisaré ${days} día(s) antes de que venzan los productos.`
+      );
       navigation.goBack();
     } catch (e) {
-      Alert.alert('Error', 'No se pudo guardar los ajustes.');
+      Alert.alert('Error', 'No se pudieron guardar los ajustes.');
     } finally {
       setSaving(false);
     }
@@ -80,9 +87,13 @@ export default function ExpirySettingsScreen({ navigation }: Props) {
               cuando un producto esté cerca de vencer.
             </Text>
 
+            {/* Valor actual + botones +/- */}
             <View style={styles.row}>
               <TouchableOpacity
-                style={[styles.circleBtn, { opacity: days <= 1 ? 0.4 : 1 }]}
+                style={[
+                  styles.circleBtn,
+                  { opacity: days <= 1 ? 0.4 : 1 },
+                ]}
                 onPress={() => adjustDays(-1)}
                 disabled={days <= 1}
               >
@@ -95,12 +106,39 @@ export default function ExpirySettingsScreen({ navigation }: Props) {
               </View>
 
               <TouchableOpacity
-                style={[styles.circleBtn, { opacity: days >= 60 ? 0.4 : 1 }]}
+                style={[
+                  styles.circleBtn,
+                  { opacity: days >= 60 ? 0.4 : 1 },
+                ]}
                 onPress={() => adjustDays(+1)}
                 disabled={days >= 60}
               >
                 <Text style={styles.circleBtnText}>＋</Text>
               </TouchableOpacity>
+            </View>
+
+            {/* Atajos rápidos */}
+            <Text style={styles.sectionLabel}>Atajos rápidos</Text>
+            <View style={styles.chipsRow}>
+              {[1, 3, 7, 14, 30].map(v => (
+                <TouchableOpacity
+                  key={v}
+                  style={[
+                    styles.chip,
+                    days === v && styles.chipActive,
+                  ]}
+                  onPress={() => setDays(v)}
+                >
+                  <Text
+                    style={[
+                      styles.chipText,
+                      days === v && styles.chipTextActive,
+                    ]}
+                  >
+                    {v === 1 ? '1 día' : `${v} días`}
+                  </Text>
+                </TouchableOpacity>
+              ))}
             </View>
 
             <Text style={styles.helper}>
@@ -131,6 +169,7 @@ const styles = StyleSheet.create({
   container: { flex: 1, padding: 16 },
   center: { flex: 1, alignItems: 'center', justifyContent: 'center' },
   loadingText: { marginTop: 8, color: '#e5e7eb' },
+
   card: {
     borderRadius: 16,
     padding: 16,
@@ -138,8 +177,18 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: 'rgba(148,163,184,0.6)',
   },
-  title: { fontSize: 18, fontWeight: '800', color: '#e5e7eb', marginBottom: 6 },
-  subtitle: { fontSize: 13, color: '#cbd5f5', marginBottom: 16 },
+  title: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: '#e5e7eb',
+    marginBottom: 6,
+  },
+  subtitle: {
+    fontSize: 13,
+    color: '#cbd5f5',
+    marginBottom: 16,
+  },
+
   row: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -174,6 +223,42 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: '#cbd5f5',
   },
+
+  sectionLabel: {
+    marginTop: 18,
+    marginBottom: 6,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#e5e7eb',
+  },
+  chipsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    columnGap: 8,
+    rowGap: 8,
+    marginBottom: 8,
+  },
+  chip: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.7)',
+    backgroundColor: 'rgba(15,23,42,0.9)',
+  },
+  chipActive: {
+    backgroundColor: 'rgba(34,197,94,0.25)',
+    borderColor: 'rgba(34,197,94,0.9)',
+  },
+  chipText: {
+    color: '#cbd5f5',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  chipTextActive: {
+    color: '#e5e7eb',
+  },
+
   helper: {
     marginTop: 16,
     fontSize: 12,

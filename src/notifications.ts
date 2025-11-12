@@ -1,5 +1,4 @@
 // src/notifications.ts
-
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import productRepo from './infrastructure/persistence/sqlite/ProductRepoSQLite';
@@ -9,11 +8,18 @@ export const BACKGROUND_TASK_NAME = 'inventory-expiry-lowstock-check';
 
 // ----------------- Config básica de notificaciones -----------------
 
+// src/notifications.ts
+
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    shouldShowAlert: true,
+    // `shouldShowAlert` está deprecado, lo dejamos en false
+    shouldShowAlert: false,
     shouldPlaySound: true,
     shouldSetBadge: false,
+
+    // 👇 API nueva
+    shouldShowBanner: true,
+    shouldShowList: true,
   }),
 } as any);
 
@@ -40,7 +46,6 @@ function warnOnce() {
 async function ensurePermission(): Promise<boolean> {
   try {
     const existing = await Notifications.getPermissionsAsync();
-    // iOS: status === 2 => granted
     if (existing.granted || existing.ios?.status === 2) {
       return true;
     }
@@ -52,29 +57,20 @@ async function ensurePermission(): Promise<boolean> {
   }
 }
 
-// ----------------- NUEVO: reprogramar avisos de vencimiento -----------------
+// ----------------- Avisos de vencimiento -----------------
 
 export async function refreshExpiryNotifications(): Promise<void> {
   try {
-    console.log('[notifications] refreshExpiryNotifications START');
-
     const ok = await ensurePermission();
     if (!ok) {
-      console.log('[notifications] sin permiso de notificaciones');
       return;
     }
 
-    // umbral configurable (1–60, por defecto 7)
     const thresholdDays = await getExpiryWarningDays();
-    console.log('[notifications] thresholdDays =', thresholdDays);
 
-    // Limpia todas las notificaciones *programadas* antes de re-crear
-    // (aunque ahora vamos a lanzar inmediatas, lo dejamos por si luego añadimos programación)
     await Notifications.cancelAllScheduledNotificationsAsync();
 
-    // Leemos todos los productos desde SQLite
     const products: any[] = await productRepo.getAll();
-    console.log('[notifications] products para notificaciones =', products.length);
 
     for (const p of products) {
       const props = (p as any).props ?? p;
@@ -86,11 +82,10 @@ export async function refreshExpiryNotifications(): Promise<void> {
       const daysToExpiry: number | null =
         typeof rawDays === 'number' && Number.isFinite(rawDays) ? rawDays : null;
 
-      // Filtros:
       if (!nextExpiry) continue;
-      if (daysToExpiry == null) continue;          // sin info de días → no notificamos
-      if (daysToExpiry < 0) continue;              // ya vencido → de momento no
-      if (daysToExpiry > thresholdDays) continue;  // muy lejos aún
+      if (daysToExpiry == null) continue;
+      if (daysToExpiry < 0) continue;
+      if (daysToExpiry > thresholdDays) continue;
 
       let body: string;
       if (daysToExpiry === 0) {
@@ -101,20 +96,59 @@ export async function refreshExpiryNotifications(): Promise<void> {
         body = `Al producto "${name}" le quedan ${daysToExpiry} día(s) antes de vencer (${nextExpiry}).`;
       }
 
-      // 🔔 En vez de programar para las 9:00, disparamos una notificación casi inmediata (en 2 segundos)
       await Notifications.scheduleNotificationAsync({
         content: {
           title: 'Producto por vencer',
           body,
         },
-        // Usamos el formato simple basado en "seconds" para evitar problemas de tipos
-        trigger: { seconds: 2 }, // se muestra casi al instante
+        trigger: { seconds: 2 },
       } as any);
     }
-
-    console.log('[notifications] refreshExpiryNotifications DONE');
   } catch (e) {
     console.error('[notifications] error en refreshExpiryNotifications', e);
+  }
+}
+
+// 🔔 Avisos de stock bajo / sin stock
+export async function notifyStockAlert(params: {
+  name: string;
+  status: 'out' | 'low';
+  qty: number;
+  minStock?: number | null;
+}) {
+  try {
+    const ok = await ensurePermission();
+    if (!ok) return;
+
+    const { name, status, qty, minStock } = params;
+
+    let title = '';
+    let body = '';
+
+    if (status === 'out') {
+      title = 'Producto sin stock';
+      body = `El producto "${name}" se quedó sin stock.`;
+      if (typeof minStock === 'number' && Number.isFinite(minStock) && minStock > 0) {
+        body += ` Stock mínimo configurado: ${minStock}.`;
+      }
+    } else {
+      title = 'Producto con bajo stock';
+      body = `El producto "${name}" está con bajo stock (stock: ${qty}`;
+      if (typeof minStock === 'number' && Number.isFinite(minStock) && minStock > 0) {
+        body += `, mínimo: ${minStock}`;
+      }
+      body += ').';
+    }
+
+    await Notifications.scheduleNotificationAsync({
+      content: {
+        title,
+        body,
+      },
+      trigger: null, // inmediato
+    } as any);
+  } catch (e) {
+    console.log('[notifications] error en notifyStockAlert', e);
   }
 }
 

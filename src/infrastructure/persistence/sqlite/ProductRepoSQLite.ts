@@ -113,7 +113,7 @@ const toDomain = (r: Row): Product => {
 export class ProductRepoSQLite implements ProductRepository {
   async getAll() {
     const rows = all<Row>(`${SELECT_BASE} ORDER BY updatedAt DESC`);
-    console.log('[ProductRepoSQLite.getAll] count =', rows.length);
+    //console.log('[ProductRepoSQLite.getAll] count =', rows.length);
     return rows.map(toDomain);
   }
   listProducts() { return this.getAll(); }

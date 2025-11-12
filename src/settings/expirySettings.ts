@@ -1,34 +1,46 @@
 // src/settings/expirySettings.ts
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const KEY = 'settings.expiryWarningDays'; // puedes dejar 'expiryWarningDays' si prefieres
+const KEY = 'expiry_warning_days_v1';
 const DEFAULT_DAYS = 7;
+const MIN_DAYS = 1;
+const MAX_DAYS = 60;
 
-// Normaliza/clampa el valor a [1, 60]
 function clampDays(value: number): number {
   if (!Number.isFinite(value)) return DEFAULT_DAYS;
-  return Math.min(60, Math.max(1, Math.round(value)));
+  if (value < MIN_DAYS) return MIN_DAYS;
+  if (value > MAX_DAYS) return MAX_DAYS;
+  return Math.round(value);
 }
 
-// LEE los días (1–60). Si no hay nada o algo raro, devuelve 7.
+/**
+ * Lee desde almacenamiento el número de días de aviso.
+ * Si no hay nada guardado, devuelve 7.
+ */
 export async function getExpiryWarningDays(): Promise<number> {
   try {
     const raw = await AsyncStorage.getItem(KEY);
-    if (raw == null) return DEFAULT_DAYS;
+    if (!raw) return DEFAULT_DAYS;
 
-    const n = Number(raw);
-    return clampDays(n);
+    const parsed = Number(raw);
+    if (!Number.isFinite(parsed)) return DEFAULT_DAYS;
+
+    return clampDays(parsed);
   } catch {
+    // Si algo falla, usamos el valor por defecto
     return DEFAULT_DAYS;
   }
 }
 
-// GUARDA los días (clamp 1–60)
+/**
+ * Guarda en almacenamiento el número de días de aviso.
+ * Siempre lo deja entre 1 y 60 días.
+ */
 export async function setExpiryWarningDays(days: number): Promise<void> {
   try {
-    const safe = clampDays(days);
-    await AsyncStorage.setItem(KEY, String(safe));
+    const clamped = clampDays(days);
+    await AsyncStorage.setItem(KEY, String(clamped));
   } catch {
-    // si falla, no rompemos la app
+    // Si falla el guardado, no rompemos la app
   }
 }
