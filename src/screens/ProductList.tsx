@@ -401,7 +401,7 @@ export default function ProductList({ navigation }: Props) {
     }, [fetch, navigation])
   );
 
-  const data: Array<ProductVM & { __skeleton?: boolean }> = useMemo(() => {
+    const data: Array<ProductVM & { __skeleton?: boolean }> = useMemo(() => {
     const mapped =
       (rawProducts ?? [])
         .map((p: any) => {
@@ -530,6 +530,37 @@ export default function ProductList({ navigation }: Props) {
 
     return byFilter;
   }, [rawProducts, loading, deletedIds, search, filter]);
+
+  // 📊 Resumen de inventario (usa `data` ya filtrado/ordenado)
+    const summary = useMemo(() => {
+    const items = (data || []).filter((it) => !it.__skeleton);
+
+    const total = items.length;
+    let expSoon = 0;
+    let expired = 0;
+    let outOfStock = 0;
+    let lowStock = 0;
+
+    items.forEach((p) => {
+      const info = getExpiryInfo(p.nextExpiry ?? null);
+      const qty = Number(p.qty ?? 0);
+      const minStock =
+        typeof p.minStock === 'number' && Number.isFinite(p.minStock)
+          ? p.minStock
+          : 0;
+
+      if (info.status === 'soon') expSoon += 1;
+      if (info.status === 'expired') expired += 1;
+
+      const stockStatus = getStockStatus(qty, minStock);
+      if (stockStatus === 'none') outOfStock += 1;
+      else if (stockStatus === 'low') lowStock += 1;
+    });
+
+    return { total, expSoon, expired, outOfStock, lowStock };
+  }, [data]);
+
+
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -889,110 +920,105 @@ export default function ProductList({ navigation }: Props) {
     ]);
   }, [onDelete]);
 
-  const renderItem = ({ item }: { item: any }) => {
-    if (item.__skeleton) return <SkeletonCard />;
+  const renderItem = ({ item }: { item: ProductVM & { __skeleton?: boolean } }) => {
+  if (item.__skeleton) return <SkeletonCard />;
 
-    const expiry = getExpiryInfo(item.nextExpiry ?? null);
+  const expiry = getExpiryInfo(item.nextExpiry ?? null);
+  const qty = Number(item.qty ?? 0);
+  const minStock =
+    typeof item.minStock === 'number' && Number.isFinite(item.minStock)
+      ? item.minStock
+      : 0;
 
-    const qty = Number(item.qty ?? 0);
-    const minStock =
-      typeof item.minStock === 'number' && Number.isFinite(item.minStock)
-        ? item.minStock
-        : 0;
+  const isOutOfStock = qty === 0;
+  const isLowStock = !isOutOfStock && minStock > 0 && qty <= minStock;
 
-    const isOutOfStock = qty === 0;
-    const isLowStock = !isOutOfStock && minStock > 0 && qty <= minStock;
+  return (
+    <View style={styles.card}>
+      <View style={styles.row}>
+        {/* 👇 SOLO la zona izquierda abre el editor */}
+        <TouchableOpacity
+          onPress={() => openEdit(item)}
+          activeOpacity={0.8}
+          style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
+        >
+          {item.photoUrl ? (
+            <Image source={{ uri: item.photoUrl }} style={styles.thumb} />
+          ) : (
+            <View style={[styles.thumb, styles.thumbEmpty]} />
+          )}
 
-    return (
-      <Pressable
-        onPress={() => openEdit(item)}
-        onLongPress={() => openEdit(item)}
-        delayLongPress={250}
-        style={({ pressed }) => [{ opacity: pressed ? 0.92 : 1 }]}
-      >
-        <View style={styles.card}>
-          <View style={styles.row}>
-            {item.photoUrl ? (
-              <Image source={{ uri: item.photoUrl }} style={styles.thumb} />
-            ) : (
-              <View style={[styles.thumb, styles.thumbEmpty]} />
-            )}
+          <View style={{ width: 12 }} />
 
-            <View style={{ width: 12 }} />
+          <View style={styles.mainCol}>
+            <Text style={styles.name}>{item.name}</Text>
+            <Text style={styles.meta}>
+              {[item.brand, item.category, item.sku].filter(Boolean).join(' · ') || '—'}
+            </Text>
 
-            <View style={styles.mainCol}>
-              <Text style={styles.name}>{item.name}</Text>
-              <Text style={styles.meta}>
-                {[item.brand, item.category, item.sku].filter(Boolean).join(' · ') ||
-                  '—'}
-              </Text>
-
-              <View style={styles.pillRow}>
-                <View
-                  style={[
-                    styles.expiryPill,
-                    {
-                      backgroundColor: expiry.color,
-                      borderColor: expiry.color,
-                      opacity: expiry.status === 'none' ? 0.4 : 1,
-                    },
-                  ]}
-                >
-                  <Text style={styles.expiryPillText}>{expiry.label}</Text>
-                </View>
-
-                {isOutOfStock && (
-                  <View style={[styles.expiryPill, styles.lowStockPill]}>
-                    <Text style={styles.expiryPillText}>SIN STOCK</Text>
-                  </View>
-                )}
-
-                {isLowStock && (
-                  <View style={[styles.expiryPill, styles.lowStockPill]}>
-                    <Text style={styles.expiryPillText}>BAJO STOCK</Text>
-                  </View>
-                )}
-              </View>
-            </View>
-
-            <View style={styles.qtyControls}>
-              <TouchableOpacity
-                style={styles.qtyBtn}
-                onPress={() => onDelta(item.id, -1)}
-              >
-                <Text style={styles.qtyBtnText}>−</Text>
-              </TouchableOpacity>
-
-              <Text
+            <View style={styles.pillRow}>
+              <View
                 style={[
-                  styles.qty,
-                  (isOutOfStock || isLowStock) && styles.qtyLow,
-                  { marginHorizontal: 8 },
+                  styles.expiryPill,
+                  {
+                    backgroundColor: expiry.color,
+                    borderColor: expiry.color,
+                    opacity: expiry.status === 'none' ? 0.4 : 1,
+                  },
                 ]}
               >
-                {qty}
-              </Text>
+                <Text style={styles.expiryPillText}>{expiry.label}</Text>
+              </View>
 
-              <TouchableOpacity
-                style={styles.qtyBtn}
-                onPress={() => onDelta(item.id, +1)}
-              >
-                <Text style={styles.qtyBtnText}>＋</Text>
-              </TouchableOpacity>
+              {isOutOfStock && (
+                <View style={[styles.expiryPill, styles.lowStockPill]}>
+                  <Text style={styles.expiryPillText}>SIN STOCK</Text>
+                </View>
+              )}
 
-              <TouchableOpacity
-                style={styles.moreBtn}
-                onPress={() => openEdit(item)}
-                accessibilityLabel="Editar producto"
-              >
-                <Text style={styles.moreBtnText}>⋮</Text>
-              </TouchableOpacity>
+              {isLowStock && (
+                <View style={[styles.expiryPill, styles.lowStockPill]}>
+                  <Text style={styles.expiryPillText}>BAJO STOCK</Text>
+                </View>
+              )}
             </View>
           </View>
+        </TouchableOpacity>
+
+        {/* 👇 Controles de cantidad y menú: capturan sus propios toques */}
+        <View style={styles.qtyControls}>
+          <TouchableOpacity style={styles.qtyBtn} onPress={() => onDelta(item.id, -1)} hitSlop={8}>
+            <Text style={styles.qtyBtnText}>−</Text>
+          </TouchableOpacity>
+
+          <Text
+            style={[
+              styles.qty,
+              (isOutOfStock || isLowStock) && styles.qtyLow,
+              { marginHorizontal: 8 },
+            ]}
+          >
+            {qty}
+          </Text>
+
+          <TouchableOpacity style={styles.qtyBtn} onPress={() => onDelta(item.id, +1)} hitSlop={8}>
+            <Text style={styles.qtyBtnText}>＋</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.moreBtn}
+            onPress={() => openEdit(item)}
+            accessibilityLabel="Editar producto"
+            hitSlop={8}
+          >
+            <Text style={styles.moreBtnText}>⋮</Text>
+          </TouchableOpacity>
         </View>
-      </Pressable>
-    );
-  };
+      </View>
+    </View>
+  );
+};
+
 
     const EmptyState = () => (
     <View style={styles.emptyWrap}>
@@ -1008,527 +1034,524 @@ export default function ProductList({ navigation }: Props) {
   );
 
   return (
-    <View style={styles.container}>
-      {/* 🔍 Buscador + botón limpiar */}
-      <View style={styles.searchBarContainer}>
-        <View style={styles.searchInputWrapper}>
+  <View style={styles.container}>
+    {/* 🔍 Buscador + botón limpiar */}
+    <View style={styles.searchBarContainer}>
+      <View style={styles.searchInputWrapper}>
+        <TextInput
+          value={search}
+          onChangeText={setSearch}
+          placeholder="Buscar por nombre, marca o SKU"
+          placeholderTextColor="rgba(255,255,255,0.5)"
+          style={styles.searchInput}
+          autoCorrect={false}
+        />
+      </View>
+
+      {!!search && (
+        <TouchableOpacity onPress={() => setSearch('')}>
+          <Text style={styles.clearSearchText}>Limpiar</Text>
+        </TouchableOpacity>
+      )}
+    </View>
+
+    {/* 🎯 Filtros rápidos */}
+    <View style={styles.filterChipsRow}>
+      <TouchableOpacity
+        style={[styles.filterChip, filter === 'all' && styles.filterChipActive]}
+        onPress={() => setFilter('all')}
+      >
+        <Text
+          style={[
+            styles.filterChipText,
+            filter === 'all' && styles.filterChipTextActive,
+          ]}
+        >
+          Todos
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={[
+          styles.filterChip,
+          filter === 'aboutToExpire' && styles.filterChipActive,
+        ]}
+        onPress={() => setFilter('aboutToExpire')}
+      >
+        <Text
+          style={[
+            styles.filterChipText,
+            filter === 'aboutToExpire' && styles.filterChipTextActive,
+          ]}
+        >
+          Por vencer
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={[
+          styles.filterChip,
+          filter === 'expired' && styles.filterChipActive,
+        ]}
+        onPress={() => setFilter('expired')}
+      >
+        <Text
+          style={[
+            styles.filterChipText,
+            filter === 'expired' && styles.filterChipTextActive,
+          ]}
+        >
+          Vencidos
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={[
+          styles.filterChip,
+          filter === 'outOfStock' && styles.filterChipActive,
+        ]}
+        onPress={() => setFilter('outOfStock')}
+      >
+        <Text
+          style={[
+            styles.filterChipText,
+            filter === 'outOfStock' && styles.filterChipTextActive,
+          ]}
+        >
+          Sin stock
+        </Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={[
+          styles.filterChip,
+          filter === 'lowStock' && styles.filterChipActive,
+        ]}
+        onPress={() => setFilter('lowStock')}
+      >
+        <Text
+          style={[
+            styles.filterChipText,
+            filter === 'lowStock' && styles.filterChipTextActive,
+          ]}
+        >
+          Bajo stock
+        </Text>
+      </TouchableOpacity>
+    </View>
+
+    {/* 📊 Resumen de inventario (tap = filtra, long-press en stock = elige) */}
+    <View style={styles.summaryRow}>
+      <TouchableOpacity
+        style={styles.summaryItem}
+        onPress={() => setFilter('all')}
+      >
+        <Text style={styles.summaryNumber}>{summary.total}</Text>
+        <Text style={styles.summaryLabel}>Productos</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.summaryItem}
+        onPress={() => setFilter('expired')}
+      >
+        <Text style={[styles.summaryNumber, { color: '#ef4444' }]}>
+          {summary.expired}
+        </Text>
+        <Text style={styles.summaryLabel}>Vencidos</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.summaryItem}
+        onPress={() => setFilter('aboutToExpire')}
+      >
+        <Text style={[styles.summaryNumber, { color: '#fb923c' }]}>
+          {summary.expSoon}
+        </Text>
+        <Text style={styles.summaryLabel}>Por vencer</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
+        style={styles.summaryItem}
+        onPress={() => setFilter('lowStock')}
+        onLongPress={() =>
+          Alert.alert('Ver alertas de stock', '¿Qué deseas ver?', [
+            { text: 'Bajo stock', onPress: () => setFilter('lowStock') },
+            { text: 'Sin stock', onPress: () => setFilter('outOfStock') },
+            { text: 'Cancelar', style: 'cancel' },
+          ])
+        }
+        delayLongPress={250}
+      >
+        <Text style={[styles.summaryNumber, { color: '#fbbf24' }]}>
+          {summary.outOfStock + summary.lowStock}
+        </Text>
+        <Text style={styles.summaryLabel}>Con alerta de stock</Text>
+      </TouchableOpacity>
+    </View>
+
+    {/* Lista principal */}
+    <FlatList
+      data={data}
+      keyExtractor={(it) => String(it.id)}
+      renderItem={renderItem}
+      refreshControl={
+        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+      }
+      ListEmptyComponent={!loading ? <EmptyState /> : null}
+      contentContainerStyle={
+        data.length === 0
+          ? { flex: 1, justifyContent: 'center', alignItems: 'center' }
+          : undefined
+      }
+    />
+
+    {/* Modal: alta NUEVO producto */}
+<Modal
+  visible={showAdd}
+  transparent
+  animationType="fade"
+  onRequestClose={() => setShowAdd(false)}
+>
+  <View style={styles.modal}>
+    <View style={styles.modalCard}>
+      <Text style={styles.modalTitle}>Nuevo producto</Text>
+
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={{ paddingBottom: 8 }}
+      >
+        {/* Foto */}
+        <View style={styles.photoRow}>
+          <View style={styles.photoPreviewWrap}>
+            {photoUri ? (
+              <Image source={{ uri: photoUri }} style={styles.photoPreview} />
+            ) : (
+              <View style={[styles.photoPreview, styles.thumbEmpty]} />
+            )}
+          </View>
+          <View style={{ flex: 1 }}>
+            <View style={{ flexDirection: 'row' }}>
+              <TouchableOpacity
+                style={[styles.smallChip, styles.secondary]}
+                onPress={() => pickFromLibrary(setPhotoUri)}
+              >
+                <Text style={styles.smallChipText}>Galería</Text>
+              </TouchableOpacity>
+              <View style={{ width: 8 }} />
+              <TouchableOpacity
+                style={[styles.smallChip, styles.secondary]}
+                onPress={() => takePhoto(setPhotoUri)}
+              >
+                <Text style={styles.smallChipText}>Cámara</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+
+        {/* Campos - NUEVO PRODUCTO */}
+        <View style={styles.fieldGroup}>
+          <Text style={styles.fieldLabel}>Nombre</Text>
           <TextInput
-            value={search}
-            onChangeText={setSearch}
-            placeholder="Buscar por nombre, marca o SKU"
+            placeholder="Ej: Cerveza IPA"
+            value={newName}
+            onChangeText={setNewName}
+            autoFocus
+            style={styles.input}
             placeholderTextColor="rgba(255,255,255,0.5)"
-            style={styles.searchInput}
-            autoCorrect={false}
           />
         </View>
 
-        {!!search && (
-          <TouchableOpacity onPress={() => setSearch('')}>
-            <Text style={styles.clearSearchText}>Limpiar</Text>
+        <View style={styles.fieldGroup}>
+          <Text style={styles.fieldLabel}>Marca</Text>
+          <TextInput
+            placeholder="Ej: Kunstmann"
+            value={newBrand}
+            onChangeText={setNewBrand}
+            style={styles.input}
+            placeholderTextColor="rgba(255,255,255,0.5)"
+          />
+        </View>
+
+        <View style={styles.fieldGroup}>
+          <Text style={styles.fieldLabel}>SKU (opcional)</Text>
+          <Text style={styles.fieldHint}>Código, código de barras o identificador interno</Text>
+          <TextInput
+            placeholder="Ej: SKU-00123"
+            value={newSku}
+            onChangeText={setNewSku}
+            autoCapitalize="characters"
+            style={styles.input}
+            placeholderTextColor="rgba(255,255,255,0.5)"
+          />
+        </View>
+
+        <View style={styles.fieldGroup}>
+          <Text style={styles.fieldLabel}>Stock inicial</Text>
+          <Text style={styles.fieldHint}>Unidades que tienes ahora mismo</Text>
+          <TextInput
+            placeholder="Ej: 12"
+            value={newQty}
+            onChangeText={setNewQty}
+            keyboardType="numeric"
+            style={styles.input}
+            placeholderTextColor="rgba(255,255,255,0.5)"
+          />
+        </View>
+
+        <View style={styles.fieldGroup}>
+          <Text style={styles.fieldLabel}>Stock mínimo (bajo stock)</Text>
+          <Text style={styles.fieldHint}>Solo para mostrar la etiqueta BAJO STOCK en la lista</Text>
+          <TextInput
+            placeholder="Ej: 3 (opcional)"
+            value={newMinStock}
+            onChangeText={setNewMinStock}
+            keyboardType="numeric"
+            style={styles.input}
+            placeholderTextColor="rgba(255,255,255,0.5)"
+          />
+        </View>
+
+        <View style={styles.fieldGroup}>
+          <Text style={styles.fieldLabel}>Fecha de vencimiento</Text>
+          <Text style={styles.fieldHint}>Formato AAAA-MM-DD</Text>
+          <TextInput
+            placeholder="Ej: 2024-12-31"
+            value={newExpiry}
+            onChangeText={setNewExpiry}
+            style={styles.input}
+            placeholderTextColor="rgba(255,255,255,0.5)"
+          />
+        </View>
+
+        <View style={{ flexDirection: 'row', marginBottom: 8 }}>
+          <TouchableOpacity style={[styles.smallChip, styles.secondary]} onPress={() => setExpiryOffset(0)}>
+            <Text style={styles.smallChipText}>Hoy</Text>
           </TouchableOpacity>
-        )}
-      </View>
+          <View style={{ width: 8 }} />
+          <TouchableOpacity style={[styles.smallChip, styles.secondary]} onPress={() => setExpiryOffset(7)}>
+            <Text style={styles.smallChipText}>+7d</Text>
+          </TouchableOpacity>
+          <View style={{ width: 8 }} />
+          <TouchableOpacity style={[styles.smallChip, styles.secondary]} onPress={() => setExpiryOffset(30)}>
+            <Text style={styles.smallChipText}>+30d</Text>
+          </TouchableOpacity>
+          <View style={{ width: 8 }} />
+          <TouchableOpacity style={[styles.smallChip, styles.secondary]} onPress={() => setNewExpiry('')}>
+            <Text style={styles.smallChipText}>Limpiar</Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
 
-      {/* 🎯 Filtros rápidos */}
-      <View style={styles.filterChipsRow}>
+      {/* Acciones NUEVO producto */}
+      <View style={[styles.modalActions, { justifyContent: 'flex-end' }]}>
         <TouchableOpacity
-          style={[
-            styles.filterChip,
-            filter === 'all' && styles.filterChipActive,
-          ]}
-          onPress={() => setFilter('all')}
+          onPress={() => setShowAdd(false)}
+          style={[styles.addButton, styles.secondary, { marginRight: 8 }]}
+          disabled={saving}
         >
-          <Text
-            style={[
-              styles.filterChipText,
-              filter === 'all' && styles.filterChipTextActive,
-            ]}
-          >
-            Todos
-          </Text>
+          <Text style={styles.addButtonText}>Cancelar</Text>
         </TouchableOpacity>
-
         <TouchableOpacity
-          style={[
-            styles.filterChip,
-            filter === 'aboutToExpire' && styles.filterChipActive,
-          ]}
-          onPress={() => setFilter('aboutToExpire')}
+          onPress={onSaveNewProduct}
+          style={[styles.addButton, styles.primary]}
+          disabled={saving}
         >
-          <Text
-            style={[
-              styles.filterChipText,
-              filter === 'aboutToExpire' && styles.filterChipTextActive,
-            ]}
-          >
-            Por vencer
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[
-            styles.filterChip,
-            filter === 'expired' && styles.filterChipActive,
-          ]}
-          onPress={() => setFilter('expired')}
-        >
-          <Text
-            style={[
-              styles.filterChipText,
-              filter === 'expired' && styles.filterChipTextActive,
-            ]}
-          >
-            Vencidos
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[
-            styles.filterChip,
-            filter === 'outOfStock' && styles.filterChipActive,
-          ]}
-          onPress={() => setFilter('outOfStock')}
-        >
-          <Text
-            style={[
-              styles.filterChipText,
-              filter === 'outOfStock' && styles.filterChipTextActive,
-            ]}
-          >
-            Sin stock
-          </Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={[
-            styles.filterChip,
-            filter === 'lowStock' && styles.filterChipActive,
-          ]}
-          onPress={() => setFilter('lowStock')}
-        >
-          <Text
-            style={[
-              styles.filterChipText,
-              filter === 'lowStock' && styles.filterChipTextActive,
-            ]}
-          >
-            Bajo stock
-          </Text>
+          <Text style={styles.addButtonText}>{saving ? 'Guardando…' : 'Guardar'}</Text>
         </TouchableOpacity>
       </View>
-
-      {/* Lista principal */}
-      <FlatList
-        data={data}
-        keyExtractor={(it) => String(it.id)}
-        renderItem={renderItem}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
-        }
-        ListEmptyComponent={!loading ? <EmptyState /> : null}
-        contentContainerStyle={
-          data.length === 0
-            ? { flex: 1, justifyContent: 'center', alignItems: 'center' }
-            : undefined
-        }
-      />
-
-      {/* FAB */}
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => setShowAdd(true)}
-        accessibilityLabel="Nuevo producto"
-      >
-        <Text style={styles.fabIcon}>＋</Text>
-      </TouchableOpacity>
-
-      {/* Modal: alta NUEVO producto */}
-      <Modal
-        visible={showAdd}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowAdd(false)}
-      >
-        <View style={styles.modal}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Nuevo producto</Text>
-
-            <ScrollView
-              keyboardShouldPersistTaps="handled"
-              contentContainerStyle={{ paddingBottom: 8 }}
-            >
-              {/* Foto */}
-              <View style={styles.photoRow}>
-                <View style={styles.photoPreviewWrap}>
-                  {photoUri ? (
-                    <Image
-                      source={{ uri: photoUri }}
-                      style={styles.photoPreview}
-                    />
-                  ) : (
-                    <View style={[styles.photoPreview, styles.thumbEmpty]} />
-                  )}
-                </View>
-                <View style={{ flex: 1 }}>
-                  <View style={{ flexDirection: 'row' }}>
-                    <TouchableOpacity
-                      style={[styles.smallChip, styles.secondary]}
-                      onPress={() => pickFromLibrary(setPhotoUri)}
-                    >
-                      <Text style={styles.smallChipText}>Galería</Text>
-                    </TouchableOpacity>
-                    <View style={{ width: 8 }} />
-                    <TouchableOpacity
-                      style={[styles.smallChip, styles.secondary]}
-                      onPress={() => takePhoto(setPhotoUri)}
-                    >
-                      <Text style={styles.smallChipText}>Cámara</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              </View>
-
-              {/* Campos - NUEVO PRODUCTO */}
-              <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Nombre</Text>
-                <TextInput
-                  placeholder="Ej: Cerveza IPA"
-                  value={newName}
-                  onChangeText={setNewName}
-                  autoFocus
-                  style={styles.input}
-                  placeholderTextColor="rgba(255,255,255,0.5)"
-                />
-              </View>
-
-              <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Marca</Text>
-                <TextInput
-                  placeholder="Ej: Kunstmann"
-                  value={newBrand}
-                  onChangeText={setNewBrand}
-                  style={styles.input}
-                  placeholderTextColor="rgba(255,255,255,0.5)"
-                />
-              </View>
-
-              <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>SKU (opcional)</Text>
-                <Text style={styles.fieldHint}>
-                  Código, código de barras o identificador interno
-                </Text>
-                <TextInput
-                  placeholder="Ej: SKU-00123"
-                  value={newSku}
-                  onChangeText={setNewSku}
-                  autoCapitalize="characters"
-                  style={styles.input}
-                  placeholderTextColor="rgba(255,255,255,0.5)"
-                />
-              </View>
-
-              <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Stock inicial</Text>
-                <Text style={styles.fieldHint}>
-                  Unidades que tienes ahora mismo
-                </Text>
-                <TextInput
-                  placeholder="Ej: 12"
-                  value={newQty}
-                  onChangeText={setNewQty}
-                  keyboardType="numeric"
-                  style={styles.input}
-                  placeholderTextColor="rgba(255,255,255,0.5)"
-                />
-              </View>
-
-              <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Stock mínimo (bajo stock)</Text>
-                <Text style={styles.fieldHint}>
-                  Solo para mostrar la etiqueta BAJO STOCK en la lista
-                </Text>
-                <TextInput
-                  placeholder="Ej: 3 (opcional)"
-                  value={newMinStock}
-                  onChangeText={setNewMinStock}
-                  keyboardType="numeric"
-                  style={styles.input}
-                  placeholderTextColor="rgba(255,255,255,0.5)"
-                />
-              </View>
-
-              <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Fecha de vencimiento</Text>
-                <Text style={styles.fieldHint}>Formato AAAA-MM-DD</Text>
-                <TextInput
-                  placeholder="Ej: 2024-12-31"
-                  value={newExpiry}
-                  onChangeText={setNewExpiry}
-                  style={styles.input}
-                  placeholderTextColor="rgba(255,255,255,0.5)"
-                />
-              </View>
-
-              <View style={{ flexDirection: 'row', marginBottom: 8 }}>
-                <TouchableOpacity
-                  style={[styles.smallChip, styles.secondary]}
-                  onPress={() => setExpiryOffset(0)}
-                >
-                  <Text style={styles.smallChipText}>Hoy</Text>
-                </TouchableOpacity>
-                <View style={{ width: 8 }} />
-                <TouchableOpacity
-                  style={[styles.smallChip, styles.secondary]}
-                  onPress={() => setExpiryOffset(7)}
-                >
-                  <Text style={styles.smallChipText}>+7d</Text>
-                </TouchableOpacity>
-                <View style={{ width: 8 }} />
-                <TouchableOpacity
-                  style={[styles.smallChip, styles.secondary]}
-                  onPress={() => setExpiryOffset(30)}
-                >
-                  <Text style={styles.smallChipText}>+30d</Text>
-                </TouchableOpacity>
-                <View style={{ width: 8 }} />
-                <TouchableOpacity
-                  style={[styles.smallChip, styles.secondary]}
-                  onPress={() => setNewExpiry('')}
-                >
-                  <Text style={styles.smallChipText}>Limpiar</Text>
-                </TouchableOpacity>
-              </View>
-            </ScrollView>
-
-            {/* Acciones NUEVO producto */}
-            <View
-              style={[styles.modalActions, { justifyContent: 'flex-end' }]}
-            >
-              <TouchableOpacity
-                onPress={() => setShowAdd(false)}
-                style={[styles.addButton, styles.secondary, { marginRight: 8 }]}
-                disabled={saving}
-              >
-                <Text style={styles.addButtonText}>Cancelar</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                onPress={onSaveNewProduct}
-                style={[styles.addButton, styles.primary]}
-                disabled={saving}
-              >
-                <Text style={styles.addButtonText}>
-                  {saving ? 'Guardando…' : 'Guardar'}
-                </Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-        </View>
-      </Modal>
-
-      {/* Modal: edición producto */}
-      <Modal
-        visible={showEdit}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowEdit(false)}
-      >
-        <View style={styles.modal}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Editar producto</Text>
-
-            <ScrollView
-              keyboardShouldPersistTaps="handled"
-              contentContainerStyle={{ paddingBottom: 8 }}
-            >
-              {/* Foto (edición) */}
-              <View style={styles.photoRow}>
-                <View style={styles.photoPreviewWrap}>
-                  {editPhotoUri ? (
-                    <Image
-                      source={{ uri: editPhotoUri }}
-                      style={styles.photoPreview}
-                    />
-                  ) : (
-                    <View style={[styles.photoPreview, styles.thumbEmpty]} />
-                  )}
-                </View>
-                <View style={{ flex: 1 }}>
-                  <View style={{ flexDirection: 'row' }}>
-                    <TouchableOpacity
-                      style={[styles.smallChip, styles.secondary]}
-                      onPress={() => pickFromLibrary(setEditPhotoUri)}
-                    >
-                      <Text style={styles.smallChipText}>Galería</Text>
-                    </TouchableOpacity>
-                    <View style={{ width: 8 }} />
-                    <TouchableOpacity
-                      style={[styles.smallChip, styles.secondary]}
-                      onPress={() => takePhoto(setEditPhotoUri)}
-                    >
-                      <Text style={styles.smallChipText}>Cámara</Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              </View>
-
-              {/* Campos - EDITAR PRODUCTO */}
-              <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Nombre</Text>
-                <TextInput
-                  placeholder="Ej: Cerveza IPA"
-                  value={editName}
-                  onChangeText={setEditName}
-                  style={styles.input}
-                  placeholderTextColor="rgba(255,255,255,0.5)"
-                />
-              </View>
-
-              <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Marca</Text>
-                <TextInput
-                  placeholder="Ej: Kunstmann"
-                  value={editBrand}
-                  onChangeText={setEditBrand}
-                  style={styles.input}
-                  placeholderTextColor="rgba(255,255,255,0.5)"
-                />
-              </View>
-
-              <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>SKU (opcional)</Text>
-                <Text style={styles.fieldHint}>
-                  Código, código de barras o identificador interno
-                </Text>
-                <TextInput
-                  placeholder="Ej: SKU-00123"
-                  value={editSku}
-                  onChangeText={setEditSku}
-                  autoCapitalize="characters"
-                  style={styles.input}
-                  placeholderTextColor="rgba(255,255,255,0.5)"
-                />
-              </View>
-
-              <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Stock actual</Text>
-                <Text style={styles.fieldHint}>
-                  Unidades que tienes ahora mismo
-                </Text>
-                <TextInput
-                  placeholder="Ej: 12"
-                  value={editQty}
-                  onChangeText={setEditQty}
-                  keyboardType="numeric"
-                  style={styles.input}
-                  placeholderTextColor="rgba(255,255,255,0.5)"
-                />
-              </View>
-
-              <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Stock mínimo (bajo stock)</Text>
-                <Text style={styles.fieldHint}>
-                  Solo para mostrar la etiqueta BAJO STOCK en la lista
-                </Text>
-                <TextInput
-                  placeholder="Ej: 3 (opcional)"
-                  value={editMinStock}
-                  onChangeText={setEditMinStock}
-                  keyboardType="numeric"
-                  style={styles.input}
-                  placeholderTextColor="rgba(255,255,255,0.5)"
-                />
-              </View>
-
-              <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Fecha de vencimiento</Text>
-                <Text style={styles.fieldHint}>Formato AAAA-MM-DD</Text>
-                <TextInput
-                  placeholder="Ej: 2024-12-31"
-                  value={editExpiry}
-                  onChangeText={setEditExpiry}
-                  style={styles.input}
-                  placeholderTextColor="rgba(255,255,255,0.5)"
-                />
-              </View>
-
-              <View style={{ flexDirection: 'row', marginBottom: 8 }}>
-                <TouchableOpacity
-                  style={[styles.smallChip, styles.secondary]}
-                  onPress={() => setEditExpiryOffset(0)}
-                >
-                  <Text style={styles.smallChipText}>Hoy</Text>
-                </TouchableOpacity>
-                <View style={{ width: 8 }} />
-                <TouchableOpacity
-                  style={[styles.smallChip, styles.secondary]}
-                  onPress={() => setEditExpiryOffset(7)}
-                >
-                  <Text style={styles.smallChipText}>+7d</Text>
-                </TouchableOpacity>
-                <View style={{ width: 8 }} />
-                <TouchableOpacity
-                  style={[styles.smallChip, styles.secondary]}
-                  onPress={() => setEditExpiryOffset(30)}
-                >
-                  <Text style={styles.smallChipText}>+30d</Text>
-                </TouchableOpacity>
-                <View style={{ width: 8 }} />
-                <TouchableOpacity
-                  style={[styles.smallChip, styles.secondary]}
-                  onPress={() => setEditExpiry('')}
-                >
-                  <Text style={styles.smallChipText}>Limpiar</Text>
-                </TouchableOpacity>
-              </View>
-            </ScrollView>
-
-            {/* Acciones edición */}
-            <View
-              style={[styles.modalActions, { justifyContent: 'space-between' }]}
-            >
-              <TouchableOpacity
-                onPress={() => editId && confirmDelete(editId)}
-                style={[
-                  styles.addButton,
-                  {
-                    borderColor: 'rgba(255,100,100,0.5)',
-                    backgroundColor: 'rgba(255,80,80,0.18)',
-                  },
-                ]}
-                disabled={deleting}
-              >
-                <Text style={styles.addButtonText}>Eliminar</Text>
-              </TouchableOpacity>
-
-              <View style={{ flexDirection: 'row' }}>
-                <TouchableOpacity
-                  onPress={() => setShowEdit(false)}
-                  style={[
-                    styles.addButton,
-                    styles.secondary,
-                    { marginRight: 8 },
-                  ]}
-                  disabled={updating}
-                >
-                  <Text style={styles.addButtonText}>Cancelar</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  onPress={onSaveEdit}
-                  style={[styles.addButton, styles.primary]}
-                  disabled={updating}
-                >
-                  <Text style={styles.addButtonText}>
-                    {updating ? 'Guardando…' : 'Guardar'}
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          </View>
-        </View>
-      </Modal>
     </View>
-  );
+  </View>
+</Modal>
+
+{/* Modal: edición producto */}
+<Modal
+  visible={showEdit}
+  transparent
+  animationType="fade"
+  onRequestClose={() => setShowEdit(false)}
+>
+  <View style={styles.modal}>
+    <View style={styles.modalCard}>
+      <Text style={styles.modalTitle}>Editar producto</Text>
+
+      <ScrollView
+        keyboardShouldPersistTaps="handled"
+        contentContainerStyle={{ paddingBottom: 8 }}
+      >
+        {/* Foto (edición) */}
+        <View style={styles.photoRow}>
+          <View style={styles.photoPreviewWrap}>
+            {editPhotoUri ? (
+              <Image source={{ uri: editPhotoUri }} style={styles.photoPreview} />
+            ) : (
+              <View style={[styles.photoPreview, styles.thumbEmpty]} />
+            )}
+          </View>
+          <View style={{ flex: 1 }}>
+            <View style={{ flexDirection: 'row' }}>
+              <TouchableOpacity
+                style={[styles.smallChip, styles.secondary]}
+                onPress={() => pickFromLibrary(setEditPhotoUri)}
+              >
+                <Text style={styles.smallChipText}>Galería</Text>
+              </TouchableOpacity>
+              <View style={{ width: 8 }} />
+              <TouchableOpacity
+                style={[styles.smallChip, styles.secondary]}
+                onPress={() => takePhoto(setEditPhotoUri)}
+              >
+                <Text style={styles.smallChipText}>Cámara</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+
+        {/* Campos - EDITAR PRODUCTO */}
+        <View style={styles.fieldGroup}>
+          <Text style={styles.fieldLabel}>Nombre</Text>
+          <TextInput
+            placeholder="Ej: Cerveza IPA"
+            value={editName}
+            onChangeText={setEditName}
+            style={styles.input}
+            placeholderTextColor="rgba(255,255,255,0.5)"
+          />
+        </View>
+
+        <View style={styles.fieldGroup}>
+          <Text style={styles.fieldLabel}>Marca</Text>
+          <TextInput
+            placeholder="Ej: Kunstmann"
+            value={editBrand}
+            onChangeText={setEditBrand}
+            style={styles.input}
+            placeholderTextColor="rgba(255,255,255,0.5)"
+          />
+        </View>
+
+        <View style={styles.fieldGroup}>
+          <Text style={styles.fieldLabel}>SKU (opcional)</Text>
+          <Text style={styles.fieldHint}>Código, código de barras o identificador interno</Text>
+          <TextInput
+            placeholder="Ej: SKU-00123"
+            value={editSku}
+            onChangeText={setEditSku}
+            autoCapitalize="characters"
+            style={styles.input}
+            placeholderTextColor="rgba(255,255,255,0.5)"
+          />
+        </View>
+
+        <View style={styles.fieldGroup}>
+          <Text style={styles.fieldLabel}>Stock actual</Text>
+          <Text style={styles.fieldHint}>Unidades que tienes ahora mismo</Text>
+          <TextInput
+            placeholder="Ej: 12"
+            value={editQty}
+            onChangeText={setEditQty}
+            keyboardType="numeric"
+            style={styles.input}
+            placeholderTextColor="rgba(255,255,255,0.5)"
+          />
+        </View>
+
+        <View style={styles.fieldGroup}>
+          <Text style={styles.fieldLabel}>Stock mínimo (bajo stock)</Text>
+          <Text style={styles.fieldHint}>Solo para mostrar la etiqueta BAJO STOCK en la lista</Text>
+          <TextInput
+            placeholder="Ej: 3 (opcional)"
+            value={editMinStock}
+            onChangeText={setEditMinStock}
+            keyboardType="numeric"
+            style={styles.input}
+            placeholderTextColor="rgba(255,255,255,0.5)"
+          />
+        </View>
+
+        <View style={styles.fieldGroup}>
+          <Text style={styles.fieldLabel}>Fecha de vencimiento</Text>
+          <Text style={styles.fieldHint}>Formato AAAA-MM-DD</Text>
+          <TextInput
+            placeholder="Ej: 2024-12-31"
+            value={editExpiry}
+            onChangeText={setEditExpiry}
+            style={styles.input}
+            placeholderTextColor="rgba(255,255,255,0.5)"
+          />
+        </View>
+
+        <View style={{ flexDirection: 'row', marginBottom: 8 }}>
+          <TouchableOpacity style={[styles.smallChip, styles.secondary]} onPress={() => setEditExpiryOffset(0)}>
+            <Text style={styles.smallChipText}>Hoy</Text>
+          </TouchableOpacity>
+          <View style={{ width: 8 }} />
+          <TouchableOpacity style={[styles.smallChip, styles.secondary]} onPress={() => setEditExpiryOffset(7)}>
+            <Text style={styles.smallChipText}>+7d</Text>
+          </TouchableOpacity>
+          <View style={{ width: 8 }} />
+          <TouchableOpacity style={[styles.smallChip, styles.secondary]} onPress={() => setEditExpiryOffset(30)}>
+            <Text style={styles.smallChipText}>+30d</Text>
+          </TouchableOpacity>
+          <View style={{ width: 8 }} />
+          <TouchableOpacity style={[styles.smallChip, styles.secondary]} onPress={() => setEditExpiry('')}>
+            <Text style={styles.smallChipText}>Limpiar</Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+
+      {/* Acciones edición */}
+      <View style={[styles.modalActions, { justifyContent: 'space-between' }]}>
+        <TouchableOpacity
+          onPress={() => editId && confirmDelete(editId)}
+          style={[
+            styles.addButton,
+            { borderColor: 'rgba(255,100,100,0.5)', backgroundColor: 'rgba(255,80,80,0.18)' },
+          ]}
+          disabled={deleting}
+        >
+          <Text style={styles.addButtonText}>Eliminar</Text>
+        </TouchableOpacity>
+
+        <View style={{ flexDirection: 'row' }}>
+          <TouchableOpacity
+            onPress={() => setShowEdit(false)}
+            style={[styles.addButton, styles.secondary, { marginRight: 8 }]}
+            disabled={updating}
+          >
+            <Text style={styles.addButtonText}>Cancelar</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            onPress={onSaveEdit}
+            style={[styles.addButton, styles.primary]}
+            disabled={updating}
+          >
+            <Text style={styles.addButtonText}>{updating ? 'Guardando…' : 'Guardar'}</Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </View>
+  </View>
+</Modal>
+
+
+    {/* FAB */}
+    <TouchableOpacity
+      style={styles.fab}
+      onPress={() => setShowAdd(true)}
+      accessibilityLabel="Nuevo producto"
+    >
+      <Text style={styles.fabIcon}>＋</Text>
+    </TouchableOpacity>
+
+    {/* Modal: alta NUEVO producto */}
+    {/** ...todo el modal de creación como ya lo tienes... */}
+
+    {/* Modal: edición producto */}
+    {/** ...todo el modal de edición como ya lo tienes... */}
+  </View>
+);
 }
+
 
 function SkeletonCard() {
   return (
@@ -1551,6 +1574,25 @@ function SkeletonCard() {
 const styles = StyleSheet.create({
   container: { flex: 1, padding: 12, backgroundColor: '#08141A' },
 
+  fab: {
+  position: 'absolute',
+  right: 18,
+  bottom: 18,
+  width: 60,
+  height: 60,
+  borderRadius: 30,
+  alignItems: 'center',
+  justifyContent: 'center',
+  backgroundColor: '#05A86D',
+  borderWidth: 1,
+  borderColor: 'rgba(180,255,220,0.6)',
+  shadowColor: '#000',
+  shadowOpacity: 0.35,
+  shadowRadius: 12,
+  shadowOffset: { width: 0, height: 8 },
+  elevation: 12,   // ⬅️ sube un poco
+  zIndex: 100,     // ⬅️ asegura estar arriba
+},
   card: {
     borderRadius: 14,
     padding: 14,
@@ -1653,24 +1695,6 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255,255,255,0.10)',
   },
 
-  fab: {
-    position: 'absolute',
-    right: 18,
-    bottom: 18,
-    width: 60,
-    height: 60,
-    borderRadius: 30,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#05A86D',
-    borderWidth: 1,
-    borderColor: 'rgba(180,255,220,0.6)',
-    shadowColor: '#000',
-    shadowOpacity: 0.35,
-    shadowRadius: 12,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 8,
-  },
   fabIcon: {
     fontSize: 30,
     color: 'white',
@@ -1892,6 +1916,32 @@ const styles = StyleSheet.create({
   filterChipTextActive: {
     color: '#EFFFFB',
   },
+    summaryRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  justifyContent: 'space-between',
+  marginBottom: 8,
+},
+summaryItem: {
+  flex: 1,
+  alignItems: 'center',
+  paddingVertical: 8,
+  marginRight: 6, // el último quedará con margen; si te molesta, quítalo o usa un wrap
+  borderRadius: 12,
+  borderWidth: 1,
+  borderColor: 'rgba(170,230,255,0.20)',
+  backgroundColor: 'rgba(255,255,255,0.04)',
+},
+summaryNumber: {
+  color: '#EFFFFB',
+  fontSize: 16,
+  fontWeight: '900',
+},
+summaryLabel: {
+  color: '#CFE8FF',
+  fontSize: 11,
+  opacity: 0.85,
+},
 });
 
 export {};
