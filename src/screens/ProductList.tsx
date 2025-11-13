@@ -21,6 +21,8 @@ import productRepo from '../infrastructure/persistence/sqlite/ProductRepoSQLite'
 import * as ImagePicker from 'expo-image-picker';
 import { getExpiryInfo } from '../utils/expiry';
 import { refreshExpiryNotifications, notifyStockAlert } from '../notifications';
+import { getExpirySettings, EXPIRY_DEFAULTS } from '../settings/expirySettings';
+
 
 // ✅ Config dinámica: solo usamos getExpiryWarningDays
 import { getExpiryWarningDays } from '../settings/expirySettings';
@@ -293,6 +295,15 @@ export default function ProductList({ navigation }: Props) {
   // ✅ Estado local para config de vencimiento (por defecto 7/30)
   const [expiryCfg, setExpiryCfg] = useState({ soonThresholdDays: 7, okThresholdDays: 30 });
 
+  // Días dinámicos para el atajo +Xd (con fallback seguro)
+    const soonDays = useMemo(
+      () =>
+        Number.isFinite(Number(expiryCfg?.soonThresholdDays))
+          ? expiryCfg.soonThresholdDays
+          : EXPIRY_DEFAULTS.soonThresholdDays,
+      [expiryCfg]
+    );
+
   // Usamos la config para calcular el estado de vencimiento
   const expiryOf = useCallback(
     (date?: string | null) => getExpiryInfo(date, {
@@ -302,15 +313,29 @@ export default function ProductList({ navigation }: Props) {
     [expiryCfg]
   );
 
-  // Cargar días de aviso desde AsyncStorage
-  const loadExpiryCfg = useCallback(async () => {
-    try {
-      const days = await getExpiryWarningDays();
-      setExpiryCfg(prev => ({ ...prev, soonThresholdDays: days }));
-    } catch {
-      setExpiryCfg({ soonThresholdDays: 7, okThresholdDays: 30 });
-    }
-  }, []);
+  // ✅ Versión recomendada: lee ambos umbrales (soon + ok)
+    const loadExpiryCfg = useCallback(async () => {
+      try {
+        const cfg = await getExpirySettings();   // ← trae { soonThresholdDays, okThresholdDays }
+        setExpiryCfg(cfg);
+      } catch {
+        setExpiryCfg(EXPIRY_DEFAULTS);           // ← {7, 30} por defecto
+      }
+    }, []);
+
+
+  // Presets de días para chips (únicos y > 0)
+    const presetDays = useMemo(
+      () =>
+        Array.from(
+          new Set(
+            [expiryCfg.soonThresholdDays, expiryCfg.okThresholdDays].filter(
+              (n) => Number.isFinite(n) && n > 0
+            )
+          )
+        ),
+      [expiryCfg]
+    );
 
   // Estado local - listado
   const [listState, setListState] = useState<any[]>([]);
@@ -420,41 +445,44 @@ export default function ProductList({ navigation }: Props) {
 
   // 2) Header (botón ＋ ⏱ +5d y ⚙️)
   useLayoutEffect(() => {
-    navigation.setOptions({
-      title: 'InventarioOp',
-      headerRight: () => (
-        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-          <TouchableOpacity
-            accessibilityLabel="Agregar producto"
-            onPress={() => { setExpiryOffset(expiryCfg.soonThresholdDays); setShowAdd(true); }}
-            style={{
-              paddingHorizontal: 12,
-              paddingVertical: 4,
-              flexDirection: 'row',
-              alignItems: 'center',
-            }}
-          >
-            <Text style={{ fontSize: 22, color: '#0a8f3c' }}>＋</Text>
-            <Text style={styles.smallBtnText}>⏱ +{expiryCfg.soonThresholdDays}d</Text>
-          </TouchableOpacity>
+  navigation.setOptions({
+    title: 'InventarioOp',
+    headerRight: () => (
+      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <TouchableOpacity
+          accessibilityLabel={`Agregar producto (fecha por defecto +${soonDays}d)`}
+          onPress={() => { setExpiryOffset(soonDays); setShowAdd(true); }}
+          style={{
+            paddingHorizontal: 12,
+            paddingVertical: 4,
+            flexDirection: 'row',
+            alignItems: 'center',
+          }}
+        >
+          <Text style={{ fontSize: 22, color: '#0a8f3c' }}>＋</Text>
+          <Text style={styles.smallBtnText}>⏱ +{soonDays}d</Text>
+        </TouchableOpacity>
+
+        <TouchableOpacity
+          accessibilityLabel="Ajustes de vencimiento"
+          onPress={() => navigation.navigate('ExpirySettings')}
+          style={{ marginLeft: 8, paddingHorizontal: 6, paddingVertical: 4 }}
+        >
+          <Text style={{ fontSize: 18 }}>⚙️</Text>
+        </TouchableOpacity>
+      </View>
+    ),
+  });
+}, [navigation, setExpiryOffset, soonDays]);
 
 
-          <TouchableOpacity
-            accessibilityLabel="Ajustes de vencimiento"
-            onPress={() => navigation.navigate('ExpirySettings')}
-            style={{ marginLeft: 8, paddingHorizontal: 6, paddingVertical: 4 }}
-          >
-            <Text style={{ fontSize: 18 }}>⚙️</Text>
-          </TouchableOpacity>
-        </View>
-      ),
-    });
-  }, [navigation, setExpiryOffset, expiryCfg.soonThresholdDays]);
-
-  // 3) Default de seguridad: si abres el modal por otra vía, propone +5d
+  // 3) Default de seguridad: propone +{soonThresholdDays}
   useEffect(() => {
-    if (showAdd && !newExpiry) setExpiryOffset(5);
-  }, [showAdd, newExpiry, setExpiryOffset]);
+    if (showAdd && !newExpiry) {
+      setExpiryOffset(expiryCfg.soonThresholdDays);
+    }
+  }, [showAdd, newExpiry, setExpiryOffset, expiryCfg.soonThresholdDays]);
+
 
   const data: Array<ProductVM & { __skeleton?: boolean }> = useMemo(() => {
     const mapped =
@@ -1071,12 +1099,13 @@ export default function ProductList({ navigation }: Props) {
       <Text style={styles.emptySubtitle}>Agrega el primero para comenzar.</Text>
       <TouchableOpacity
         style={[styles.addButton, styles.primary]}
-        onPress={() => { setExpiryOffset(expiryCfg.soonThresholdDays); setShowAdd(true); }}
+        onPress={() => { setExpiryOffset(soonDays); setShowAdd(true); }}
       >
         <Text style={styles.addButtonText}>Agregar producto</Text>
       </TouchableOpacity>
     </View>
   );
+
 
   return (
     <View style={styles.container}>
@@ -1581,7 +1610,7 @@ export default function ProductList({ navigation }: Props) {
       {/* FAB */}
       <TouchableOpacity
         style={styles.fab}
-        onPress={() => { setExpiryOffset(5); setShowAdd(true); }} // ← ahora propone +5d
+        onPress={() => { setExpiryOffset(soonDays); setShowAdd(true); }}
         accessibilityLabel="Nuevo producto"
       >
         <Text style={styles.fabIcon}>＋</Text>
