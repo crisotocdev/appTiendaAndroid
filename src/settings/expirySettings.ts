@@ -1,46 +1,94 @@
 // src/settings/expirySettings.ts
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const KEY = 'expiry_warning_days_v1';
-const DEFAULT_DAYS = 7;
-const MIN_DAYS = 1;
-const MAX_DAYS = 60;
+// Claves de almacenamiento
+const KEY_SOON = 'expiry_warning_days_v1';         // legado: "por vencer"
+const KEY_OK   = 'expiry_ok_threshold_days_v1';    // nuevo: "ok" vs "lejos"
 
-function clampDays(value: number): number {
-  if (!Number.isFinite(value)) return DEFAULT_DAYS;
-  if (value < MIN_DAYS) return MIN_DAYS;
-  if (value > MAX_DAYS) return MAX_DAYS;
-  return Math.round(value);
+// Valores por defecto (también los usa ProductList)
+export const EXPIRY_DEFAULTS = {
+  // días para mostrar "Por vencer"
+  soonThresholdDays: 7,
+  // hasta cuántos días se considera "OK" (luego sería "Lejos")
+  okThresholdDays: 30,
+};
+
+// Límites
+const MIN_SOON = 1;
+const MAX_SOON = 60;
+const MIN_OK = 2;
+const MAX_OK = 365;
+
+function clamp(n: number, min: number, max: number, fallback: number) {
+  const v = Number(n);
+  if (!Number.isFinite(v)) return fallback;
+  if (v < min) return min;
+  if (v > max) return max;
+  return Math.round(v);
 }
 
-/**
- * Lee desde almacenamiento el número de días de aviso.
- * Si no hay nada guardado, devuelve 7.
- */
+/* ========= API LEGADA (¡NO ROMPE NADA!) ========= */
+/** Usado por notifications y pantallas antiguas */
 export async function getExpiryWarningDays(): Promise<number> {
   try {
-    const raw = await AsyncStorage.getItem(KEY);
-    if (!raw) return DEFAULT_DAYS;
-
-    const parsed = Number(raw);
-    if (!Number.isFinite(parsed)) return DEFAULT_DAYS;
-
-    return clampDays(parsed);
+    const raw = await AsyncStorage.getItem(KEY_SOON);
+    if (!raw) return EXPIRY_DEFAULTS.soonThresholdDays;
+    return clamp(Number(raw), MIN_SOON, MAX_SOON, EXPIRY_DEFAULTS.soonThresholdDays);
   } catch {
-    // Si algo falla, usamos el valor por defecto
-    return DEFAULT_DAYS;
+    return EXPIRY_DEFAULTS.soonThresholdDays;
   }
 }
 
-/**
- * Guarda en almacenamiento el número de días de aviso.
- * Siempre lo deja entre 1 y 60 días.
- */
 export async function setExpiryWarningDays(days: number): Promise<void> {
   try {
-    const clamped = clampDays(days);
-    await AsyncStorage.setItem(KEY, String(clamped));
+    const clamped = clamp(days, MIN_SOON, MAX_SOON, EXPIRY_DEFAULTS.soonThresholdDays);
+    await AsyncStorage.setItem(KEY_SOON, String(clamped));
   } catch {
-    // Si falla el guardado, no rompemos la app
+    // noop
   }
+}
+
+/* ========= API NUEVA (para ProductList configurable) ========= */
+export type ExpirySettings = {
+  /** días para mostrar "Por vencer" */
+  soonThresholdDays: number;
+  /** hasta cuántos días se considera "OK" antes de pasar a "Lejos" */
+  okThresholdDays: number;
+};
+
+export async function getExpirySettings(): Promise<ExpirySettings> {
+  const soon = await getExpiryWarningDays();
+  let ok = EXPIRY_DEFAULTS.okThresholdDays;
+  try {
+    const rawOk = await AsyncStorage.getItem(KEY_OK);
+    if (rawOk) ok = clamp(Number(rawOk), MIN_OK, MAX_OK, EXPIRY_DEFAULTS.okThresholdDays);
+  } catch { /* ignore */ }
+
+  // coherencia: ok > soon
+  if (ok <= soon) ok = Math.min(Math.max(soon + 1, MIN_OK), MAX_OK);
+
+  return { soonThresholdDays: soon, okThresholdDays: ok };
+}
+
+export async function setExpirySettings(partial: Partial<ExpirySettings>): Promise<void> {
+  const current = await getExpirySettings();
+  const next: ExpirySettings = {
+    soonThresholdDays: clamp(
+      partial.soonThresholdDays ?? current.soonThresholdDays,
+      MIN_SOON, MAX_SOON, EXPIRY_DEFAULTS.soonThresholdDays
+    ),
+    okThresholdDays: clamp(
+      partial.okThresholdDays ?? current.okThresholdDays,
+      MIN_OK, MAX_OK, EXPIRY_DEFAULTS.okThresholdDays
+    ),
+  };
+  if (next.okThresholdDays <= next.soonThresholdDays) {
+    next.okThresholdDays = Math.min(Math.max(next.soonThresholdDays + 1, MIN_OK), MAX_OK);
+  }
+  try {
+    await AsyncStorage.multiSet([
+      [KEY_SOON, String(next.soonThresholdDays)],
+      [KEY_OK, String(next.okThresholdDays)],
+    ]);
+  } catch { /* ignore */ }
 }
