@@ -3,20 +3,16 @@ import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import productRepo from './infrastructure/persistence/sqlite/ProductRepoSQLite';
 import { getExpiryWarningDays } from './settings/expirySettings';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-export const BACKGROUND_TASK_NAME = 'inventory-expiry-lowstock-check';
 
 // ----------------- Config básica de notificaciones -----------------
 
-// src/notifications.ts
-
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    // 🔊 Sonido y badge como antes
     shouldPlaySound: true,
     shouldSetBadge: false,
-
-    // 👇 API nueva
+    // API nueva (SDK >= 53)
     shouldShowBanner: true,
     shouldShowList: true,
   }),
@@ -32,22 +28,29 @@ if (Platform.OS === 'android') {
   });
 }
 
-// ----------------- Helpers internos -----------------
+// ----------------- Helpers de tipos (arreglan TS: "type" es requerido) -----------------
 
-let warned = false;
-function warnOnce() {
-  if (__DEV__ && !warned) {
-    console.log('[notifications] Background task stub activa (sin efecto).');
-    warned = true;
-  }
+const KEY_LAST_STOCK_ALERT = 'last_stock_alert_v1';
+
+// Tipos (si tu editor no los reconoce, deja los "as any")
+type DateTrig = Notifications.DateTriggerInput;
+type TimeTrig = Notifications.TimeIntervalTriggerInput;
+type AnyTrig = Notifications.NotificationTriggerInput;
+
+// Construye un trigger de FECHA (ejecuta en un Date exacto)
+function at(date: Date): AnyTrig {
+  return { type: 'date', date } as DateTrig as AnyTrig;
+}
+
+// Construye un trigger por INTERVALO DE TIEMPO (x segundos desde ahora)
+function inSeconds(seconds: number): AnyTrig {
+  return { type: 'timeInterval', seconds, repeats: false } as TimeTrig as AnyTrig;
 }
 
 async function ensurePermission(): Promise<boolean> {
   try {
     const existing = await Notifications.getPermissionsAsync();
-    if (existing.granted || existing.ios?.status === 2) {
-      return true;
-    }
+    if (existing.granted || existing.ios?.status === 2) return true;
     const requested = await Notifications.requestPermissionsAsync();
     return requested.granted || requested.ios?.status === 2;
   } catch (e) {
@@ -56,17 +59,39 @@ async function ensurePermission(): Promise<boolean> {
   }
 }
 
+// Pequeño util para días entre hoy y una fecha YYYY-MM-DD
+function daysUntil(ymd: string): number | null {
+  const d = new Date(ymd);
+  if (Number.isNaN(d.getTime())) return null;
+  const today = new Date();
+  // Zerar horas para calcular por días completos
+  d.setHours(0, 0, 0, 0);
+  today.setHours(0, 0, 0, 0);
+  const diff = (d.getTime() - today.getTime()) / 86400000;
+  return Math.round(diff);
+}
+
+async function shouldNotifyStockOnce(key: string): Promise<boolean> {
+  try {
+    const last = await AsyncStorage.getItem(KEY_LAST_STOCK_ALERT);
+    if (last === key) return false; // misma alerta inmediata → suprimir
+    await AsyncStorage.setItem(KEY_LAST_STOCK_ALERT, key);
+    return true;
+  } catch {
+    return true;
+  }
+}
+
 // ----------------- Avisos de vencimiento -----------------
 
 export async function refreshExpiryNotifications(): Promise<void> {
   try {
     const ok = await ensurePermission();
-    if (!ok) {
-      return;
-    }
+    if (!ok) return;
 
     const thresholdDays = await getExpiryWarningDays();
 
+    // Cancelamos todas las programadas antes de reprogramar
     await Notifications.cancelAllScheduledNotificationsAsync();
 
     const products: any[] = await productRepo.getAll();
@@ -74,34 +99,41 @@ export async function refreshExpiryNotifications(): Promise<void> {
     for (const p of products) {
       const props = (p as any).props ?? p;
 
-      const name: string = props.name ?? 'Producto';
-      const nextExpiry: string | null = props.nextExpiry ?? null;
-
-      const rawDays = props.daysToExpiry;
-      const daysToExpiry: number | null =
-        typeof rawDays === 'number' && Number.isFinite(rawDays) ? rawDays : null;
+      const name: string = props?.name ?? 'Producto';
+      const nextExpiry: string | null =
+        props?.nextExpiry ?? props?.expiry ?? props?.expirationDate ?? null;
 
       if (!nextExpiry) continue;
-      if (daysToExpiry == null) continue;
-      if (daysToExpiry < 0) continue;
-      if (daysToExpiry > thresholdDays) continue;
 
+      // Usa daysToExpiry si viene de la DB; si no, lo calculamos
+      const rawDays = props?.daysToExpiry;
+      const dte: number | null =
+        typeof rawDays === 'number' && Number.isFinite(rawDays)
+          ? rawDays
+          : daysUntil(nextExpiry);
+
+      if (dte == null) continue;    // fecha inválida
+      if (dte < 0) continue;        // ya vencido
+      if (dte > thresholdDays) continue; // aún lejos del umbral
+
+      // Mensaje
       let body: string;
-      if (daysToExpiry === 0) {
+      if (dte === 0) {
         body = `El producto "${name}" vence HOY (${nextExpiry}).`;
-      } else if (daysToExpiry === 1) {
+      } else if (dte === 1) {
         body = `Al producto "${name}" le queda 1 día antes de vencer (${nextExpiry}).`;
       } else {
-        body = `Al producto "${name}" le quedan ${daysToExpiry} día(s) antes de vencer (${nextExpiry}).`;
+        body = `Al producto "${name}" le quedan ${dte} día(s) antes de vencer (${nextExpiry}).`;
       }
 
+      // 🔔 Programamos inmediatamente (2s) — evita incompatibilidades entre plataformas
       await Notifications.scheduleNotificationAsync({
         content: {
           title: 'Producto por vencer',
           body,
         },
-        trigger: { seconds: 2 },
-      } as any);
+        trigger: inSeconds(2), // 👈 FIX: antes { seconds: 2 } → ahora con type: 'timeInterval'
+      });
     }
   } catch (e) {
     console.error('[notifications] error en refreshExpiryNotifications', e);
@@ -120,6 +152,11 @@ export async function notifyStockAlert(params: {
     if (!ok) return;
 
     const { name, status, qty, minStock } = params;
+
+    // 🔒 Anti-duplicado inmediato (misma alerta consecutiva)
+    const dedupeKey = `${status}|${name}|${qty}|${minStock ?? ''}`;
+    const allowed = await shouldNotifyStockOnce(dedupeKey);
+    if (!allowed) return;
 
     let title = '';
     let body = '';
@@ -140,10 +177,7 @@ export async function notifyStockAlert(params: {
     }
 
     await Notifications.scheduleNotificationAsync({
-      content: {
-        title,
-        body,
-      },
+      content: { title, body },
       trigger: null, // inmediato
     } as any);
   } catch (e) {
@@ -151,14 +185,16 @@ export async function notifyStockAlert(params: {
   }
 }
 
-// ----------------- Funciones antiguas (compatibilidad) -----------------
+
+// ----------------- Stubs antiguos (mantienen compatibilidad) -----------------
 
 export async function registerBackgroundTask(): Promise<void> {
-  warnOnce();
+  // Expo Go ya no soporta remote push; y el background check se queda como stub
+  if (__DEV__) console.log('[notifications] Background task stub (sin efecto en Expo Go).');
 }
 
 export async function unregisterBackgroundTask(): Promise<void> {
-  warnOnce();
+  if (__DEV__) console.log('[notifications] Background task stub (sin efecto en Expo Go).');
 }
 
 export async function askNotificationPermission(): Promise<void> {
