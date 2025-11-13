@@ -22,11 +22,8 @@ import * as ImagePicker from 'expo-image-picker';
 import { getExpiryInfo } from '../utils/expiry';
 import { refreshExpiryNotifications, notifyStockAlert } from '../notifications';
 
-// 👇 Nuevo: configuración dinámica de vencimiento
-import {
-  getExpirySettings,
-  EXPIRY_DEFAULTS,
-} from '../settings/expirySettings';
+// ✅ Config dinámica: solo usamos getExpiryWarningDays
+import { getExpiryWarningDays } from '../settings/expirySettings';
 
 type Props = NativeStackScreenProps<any>;
 
@@ -293,8 +290,10 @@ async function tryUpdateQtyWithPayloads(
 export default function ProductList({ navigation }: Props) {
   const app = useApp() as any;
 
-  // 👇 Nuevo: configuración dinámica (cargada desde AsyncStorage)
-  const [expiryCfg, setExpiryCfg] = useState(EXPIRY_DEFAULTS);
+  // ✅ Estado local para config de vencimiento (por defecto 7/30)
+  const [expiryCfg, setExpiryCfg] = useState({ soonThresholdDays: 7, okThresholdDays: 30 });
+
+  // Usamos la config para calcular el estado de vencimiento
   const expiryOf = useCallback(
     (date?: string | null) => getExpiryInfo(date, {
       soonThresholdDays: expiryCfg.soonThresholdDays,
@@ -302,12 +301,14 @@ export default function ProductList({ navigation }: Props) {
     }),
     [expiryCfg]
   );
+
+  // Cargar días de aviso desde AsyncStorage
   const loadExpiryCfg = useCallback(async () => {
     try {
-      const cfg = await getExpirySettings();
-      setExpiryCfg(cfg);
+      const days = await getExpiryWarningDays();
+      setExpiryCfg(prev => ({ ...prev, soonThresholdDays: days }));
     } catch {
-      setExpiryCfg(EXPIRY_DEFAULTS);
+      setExpiryCfg({ soonThresholdDays: 7, okThresholdDays: 30 });
     }
   }, []);
 
@@ -417,7 +418,7 @@ export default function ProductList({ navigation }: Props) {
     loadExpiryCfg();
   }, [loadExpiryCfg]);
 
-  // 2) Header (botón ＋ ⏱ +5d y ⚙️) — se configura al montar la vista
+  // 2) Header (botón ＋ ⏱ +5d y ⚙️)
   useLayoutEffect(() => {
     navigation.setOptions({
       title: 'InventarioOp',
