@@ -16,7 +16,7 @@ import {
   setExpirySettings,
   EXPIRY_DEFAULTS,
 } from '../settings/expirySettings';
-import { refreshExpiryNotifications } from '../notifications';
+import { refreshExpiryNotifications } from '../notifications'; // ← sólo este
 
 type Props = NativeStackScreenProps<any>;
 
@@ -59,7 +59,6 @@ export default function ExpirySettingsScreen({ navigation }: Props) {
   }, []);
 
   const onSave = useCallback(async () => {
-    // coherencia: ok > soon
     const safeSoon = clamp(soon, MIN_SOON, MAX_SOON);
     let safeOk = clamp(ok, MIN_OK, MAX_OK);
     if (safeOk <= safeSoon) safeOk = Math.min(Math.max(safeSoon + 1, MIN_OK), MAX_OK);
@@ -82,6 +81,16 @@ export default function ExpirySettingsScreen({ navigation }: Props) {
       setSaving(false);
     }
   }, [soon, ok, navigation]);
+
+  // Botón de prueba: reprograma/dispara avisos con los umbrales actuales
+  const onTest = useCallback(async () => {
+    try {
+      await refreshExpiryNotifications();
+      Alert.alert('Listo', 'Se disparó una notificación de prueba si corresponde.');
+    } catch {
+      Alert.alert('Error', 'No se pudo disparar la prueba. Revisa permisos de notificación.');
+    }
+  }, []);
 
   const reset = useCallback(() => {
     setSoon(EXPIRY_DEFAULTS.soonThresholdDays);
@@ -217,6 +226,14 @@ export default function ExpirySettingsScreen({ navigation }: Props) {
               <Text style={styles.saveBtnText}>{saving ? 'Guardando…' : 'Guardar ajustes'}</Text>
             </TouchableOpacity>
           </View>
+
+          {/* Botón de prueba debajo (verde) */}
+          <TouchableOpacity
+            onPress={onTest}
+            style={[styles.saveBtn, { marginTop: 10, backgroundColor: '#22c55e' }]}
+          >
+            <Text style={styles.saveBtnText}>Probar notificación ahora</Text>
+          </TouchableOpacity>
         </>
       )}
     </View>

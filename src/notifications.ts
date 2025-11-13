@@ -4,7 +4,7 @@ import { Platform } from 'react-native';
 import productRepo from './infrastructure/persistence/sqlite/ProductRepoSQLite';
 import { getExpiryWarningDays } from './settings/expirySettings';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-
+import { getExpiryInfo } from './utils/expiry';
 
 // ----------------- Config básica de notificaciones -----------------
 
@@ -97,44 +97,36 @@ export async function refreshExpiryNotifications(): Promise<void> {
     const products: any[] = await productRepo.getAll();
 
     for (const p of products) {
-      const props = (p as any).props ?? p;
+  const props = (p as any).props ?? p;
 
-      const name: string = props?.name ?? 'Producto';
-      const nextExpiry: string | null =
-        props?.nextExpiry ?? props?.expiry ?? props?.expirationDate ?? null;
+  const name: string = props.name ?? 'Producto';
+  const nextExpiry: string | null =
+    props.nextExpiry ?? props.expirationDate ?? props.vence ?? null;
 
-      if (!nextExpiry) continue;
+  if (!nextExpiry) continue;
 
-      // Usa daysToExpiry si viene de la DB; si no, lo calculamos
-      const rawDays = props?.daysToExpiry;
-      const dte: number | null =
-        typeof rawDays === 'number' && Number.isFinite(rawDays)
-          ? rawDays
-          : daysUntil(nextExpiry);
+  // 🔁 Recalcular días restantes con el umbral actual (sin depender del repo)
+  const info = getExpiryInfo(nextExpiry, {
+    soonThresholdDays: thresholdDays,
+    okThresholdDays: Math.max(thresholdDays + 1, 30), // valor seguro
+  });
 
-      if (dte == null) continue;    // fecha inválida
-      if (dte < 0) continue;        // ya vencido
-      if (dte > thresholdDays) continue; // aún lejos del umbral
+  if (info.days == null || info.days < 0) continue;      // vencido o sin fecha válida
+  if (info.days > thresholdDays) continue;               // aún lejos del umbral
 
-      // Mensaje
-      let body: string;
-      if (dte === 0) {
-        body = `El producto "${name}" vence HOY (${nextExpiry}).`;
-      } else if (dte === 1) {
-        body = `Al producto "${name}" le queda 1 día antes de vencer (${nextExpiry}).`;
-      } else {
-        body = `Al producto "${name}" le quedan ${dte} día(s) antes de vencer (${nextExpiry}).`;
-      }
+  const body =
+    info.days === 0
+      ? `El producto "${name}" vence HOY (${nextExpiry}).`
+      : info.days === 1
+      ? `Al producto "${name}" le queda 1 día antes de vencer (${nextExpiry}).`
+      : `Al producto "${name}" le quedan ${info.days} día(s) antes de vencer (${nextExpiry}).`;
 
-      // 🔔 Programamos inmediatamente (2s) — evita incompatibilidades entre plataformas
-      await Notifications.scheduleNotificationAsync({
-        content: {
-          title: 'Producto por vencer',
-          body,
-        },
-        trigger: inSeconds(2), // 👈 FIX: antes { seconds: 2 } → ahora con type: 'timeInterval'
-      });
-    }
+  await Notifications.scheduleNotificationAsync({
+    content: { title: 'Producto por vencer', body },
+    // ⏱ Local inmediata (evita errores de tipos con triggers por fecha)
+    trigger: null,
+  } as any);
+}
   } catch (e) {
     console.error('[notifications] error en refreshExpiryNotifications', e);
   }

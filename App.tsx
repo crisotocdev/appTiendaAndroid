@@ -9,10 +9,18 @@ import { AppProvider } from './src/ui/providers/AppProvider';
 import { askNotificationPermission, scheduleDailyCheck } from './src/notifications';
 
 export default function App() {
-  // Opcional: permisos y chequeo diario (queda no-op si están en stub)
   useEffect(() => {
-    askNotificationPermission?.();
-    scheduleDailyCheck?.();
+    let mounted = true;
+    (async () => {
+      try {
+        await askNotificationPermission();   // pide permiso primero
+        if (!mounted) return;
+        await scheduleDailyCheck();          // refresca/programa avisos de vencimiento
+      } catch (e) {
+        console.log('[App] init notifications error', e);
+      }
+    })();
+    return () => { mounted = false; };
   }, []);
 
   return (
