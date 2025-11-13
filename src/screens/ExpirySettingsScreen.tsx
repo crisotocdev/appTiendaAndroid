@@ -7,20 +7,29 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
+  TextInput,
 } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useTheme } from '../theme/ThemeProvider';
 import {
-  getExpiryWarningDays,
-  setExpiryWarningDays,
+  getExpirySettings,
+  setExpirySettings,
+  EXPIRY_DEFAULTS,
 } from '../settings/expirySettings';
 import { refreshExpiryNotifications } from '../notifications';
 
 type Props = NativeStackScreenProps<any>;
 
+const MIN_SOON = 1;
+const MAX_SOON = 60;
+const MIN_OK = 2;
+const MAX_OK = 365;
+
 export default function ExpirySettingsScreen({ navigation }: Props) {
   const t = useTheme();
-  const [days, setDays] = useState<number>(7);
+
+  const [soon, setSoon] = useState<number>(EXPIRY_DEFAULTS.soonThresholdDays);
+  const [ok, setOk] = useState<number>(EXPIRY_DEFAULTS.okThresholdDays);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -29,42 +38,55 @@ export default function ExpirySettingsScreen({ navigation }: Props) {
 
     (async () => {
       try {
-        const current = await getExpiryWarningDays();
-        setDays(current ?? 7);
-      } catch {
-        // fallback 7
-        setDays(7);
+        const s = await getExpirySettings();
+        setSoon(s.soonThresholdDays);
+        setOk(s.okThresholdDays);
       } finally {
         setLoading(false);
       }
     })();
   }, [navigation]);
 
-  const adjustDays = useCallback((delta: number) => {
-    setDays(prev => {
-      const next = prev + delta;
-      // rango permitido 1–60
-      return Math.min(60, Math.max(1, next));
-    });
+  const clamp = (n: number, min: number, max: number) =>
+    Math.max(min, Math.min(max, Math.round(n)));
+
+  const adjustSoon = useCallback((d: number) => {
+    setSoon(prev => clamp(prev + d, MIN_SOON, MAX_SOON));
+  }, []);
+
+  const adjustOk = useCallback((d: number) => {
+    setOk(prev => clamp(prev + d, MIN_OK, MAX_OK));
   }, []);
 
   const onSave = useCallback(async () => {
+    // coherencia: ok > soon
+    const safeSoon = clamp(soon, MIN_SOON, MAX_SOON);
+    let safeOk = clamp(ok, MIN_OK, MAX_OK);
+    if (safeOk <= safeSoon) safeOk = Math.min(Math.max(safeSoon + 1, MIN_OK), MAX_OK);
+
     try {
       setSaving(true);
-      await setExpiryWarningDays(days);
-      // reprogramar notificaciones con el nuevo umbral
+      await setExpirySettings({
+        soonThresholdDays: safeSoon,
+        okThresholdDays: safeOk,
+      });
       await refreshExpiryNotifications();
       Alert.alert(
         'Guardado',
-        `Te avisaré ${days} día(s) antes de que venzan los productos.`
+        `“Por vencer”: ${safeSoon} día(s) • “OK” hasta: ${safeOk} día(s).`
       );
       navigation.goBack();
-    } catch (e) {
+    } catch {
       Alert.alert('Error', 'No se pudieron guardar los ajustes.');
     } finally {
       setSaving(false);
     }
-  }, [days, navigation]);
+  }, [soon, ok, navigation]);
+
+  const reset = useCallback(() => {
+    setSoon(EXPIRY_DEFAULTS.soonThresholdDays);
+    setOk(EXPIRY_DEFAULTS.okThresholdDays);
+  }, []);
 
   return (
     <View
@@ -80,85 +102,121 @@ export default function ExpirySettingsScreen({ navigation }: Props) {
         </View>
       ) : (
         <>
+          {/* Card: POR VENCER */}
           <View style={styles.card}>
-            <Text style={styles.title}>Avisos de vencimiento</Text>
+            <Text style={styles.title}>“Por vencer” (días)</Text>
             <Text style={styles.subtitle}>
-              Define con cuántos días de anticipación quieres recibir una alerta
-              cuando un producto esté cerca de vencer.
+              Muestra la etiqueta POR VENCER cuando falten ≤ este número de días.
             </Text>
 
-            {/* Valor actual + botones +/- */}
             <View style={styles.row}>
               <TouchableOpacity
-                style={[
-                  styles.circleBtn,
-                  { opacity: days <= 1 ? 0.4 : 1 },
-                ]}
-                onPress={() => adjustDays(-1)}
-                disabled={days <= 1}
+                style={[styles.circleBtn, { opacity: soon <= MIN_SOON ? 0.4 : 1 }]}
+                onPress={() => adjustSoon(-1)}
+                disabled={soon <= MIN_SOON}
               >
                 <Text style={styles.circleBtnText}>−</Text>
               </TouchableOpacity>
 
-              <View style={styles.daysBox}>
-                <Text style={styles.daysNumber}>{days}</Text>
-                <Text style={styles.daysLabel}>día(s) antes</Text>
+              <View style={styles.valueBox}>
+                <Text style={styles.valueNumber}>{soon}</Text>
+                <Text style={styles.valueLabel}>día(s) antes</Text>
               </View>
 
               <TouchableOpacity
-                style={[
-                  styles.circleBtn,
-                  { opacity: days >= 60 ? 0.4 : 1 },
-                ]}
-                onPress={() => adjustDays(+1)}
-                disabled={days >= 60}
+                style={[styles.circleBtn, { opacity: soon >= MAX_SOON ? 0.4 : 1 }]}
+                onPress={() => adjustSoon(+1)}
+                disabled={soon >= MAX_SOON}
               >
                 <Text style={styles.circleBtnText}>＋</Text>
               </TouchableOpacity>
             </View>
 
-            {/* Atajos rápidos */}
             <Text style={styles.sectionLabel}>Atajos rápidos</Text>
             <View style={styles.chipsRow}>
               {[1, 3, 7, 14, 30].map(v => (
                 <TouchableOpacity
-                  key={v}
-                  style={[
-                    styles.chip,
-                    days === v && styles.chipActive,
-                  ]}
-                  onPress={() => setDays(v)}
+                  key={`soon-${v}`}
+                  style={[styles.chip, soon === v && styles.chipActive]}
+                  onPress={() => setSoon(v)}
                 >
-                  <Text
-                    style={[
-                      styles.chipText,
-                      days === v && styles.chipTextActive,
-                    ]}
-                  >
+                  <Text style={[styles.chipText, soon === v && styles.chipTextActive]}>
                     {v === 1 ? '1 día' : `${v} días`}
                   </Text>
                 </TouchableOpacity>
               ))}
             </View>
 
+            <Text style={styles.helper}>Rango permitido: {MIN_SOON}–{MAX_SOON} días.</Text>
+          </View>
+
+          {/* Card: OK HASTA */}
+          <View style={styles.card}>
+            <Text style={styles.title}>“OK” hasta (días)</Text>
+            <Text style={styles.subtitle}>
+              Hasta este umbral se mostrará OK; sobre este valor se mostrará LEJOS.
+            </Text>
+
+            <View style={styles.row}>
+              <TouchableOpacity
+                style={[styles.circleBtn, { opacity: ok <= MIN_OK ? 0.4 : 1 }]}
+                onPress={() => adjustOk(-1)}
+                disabled={ok <= MIN_OK}
+              >
+                <Text style={styles.circleBtnText}>−</Text>
+              </TouchableOpacity>
+
+              <TextInput
+                value={String(ok)}
+                onChangeText={t => setOk(clamp(Number(t.replace(/[^\d]/g, '') || '0'), MIN_OK, MAX_OK))}
+                keyboardType="numeric"
+                style={styles.input}
+                placeholderTextColor="rgba(255,255,255,0.5)"
+              />
+
+              <TouchableOpacity
+                style={[styles.circleBtn, { opacity: ok >= MAX_OK ? 0.4 : 1 }]}
+                onPress={() => adjustOk(+1)}
+                disabled={ok >= MAX_OK}
+              >
+                <Text style={styles.circleBtnText}>＋</Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.sectionLabel}>Atajos rápidos</Text>
+            <View style={styles.chipsRow}>
+              {[14, 30, 45, 60, 90].map(v => (
+                <TouchableOpacity
+                  key={`ok-${v}`}
+                  style={[styles.chip, ok === v && styles.chipActive]}
+                  onPress={() => setOk(v)}
+                >
+                  <Text style={[styles.chipText, ok === v && styles.chipTextActive]}>
+                    {v} días
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+
             <Text style={styles.helper}>
-              Rango permitido: entre 1 y 60 días. Solo se notificarán productos con
-              fecha de vencimiento conocida.
+              Rango permitido: {MIN_OK}–{MAX_OK} días. Siempre debe ser mayor que “Por vencer”.
             </Text>
           </View>
 
-          <TouchableOpacity
-            onPress={onSave}
-            disabled={saving}
-            style={[
-              styles.saveBtn,
-              { opacity: saving ? 0.6 : 1 },
-            ]}
-          >
-            <Text style={styles.saveBtnText}>
-              {saving ? 'Guardando…' : 'Guardar ajustes'}
-            </Text>
-          </TouchableOpacity>
+          {/* Acciones */}
+          <View style={styles.actionsRow}>
+            <TouchableOpacity style={[styles.secondaryBtn]} onPress={reset} disabled={saving}>
+              <Text style={styles.secondaryBtnText}>Restablecer</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={onSave}
+              disabled={saving}
+              style={[styles.saveBtn, { opacity: saving ? 0.6 : 1 }]}
+            >
+              <Text style={styles.saveBtnText}>{saving ? 'Guardando…' : 'Guardar ajustes'}</Text>
+            </TouchableOpacity>
+          </View>
         </>
       )}
     </View>
@@ -176,104 +234,55 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(15,23,42,0.95)',
     borderWidth: 1,
     borderColor: 'rgba(148,163,184,0.6)',
+    marginBottom: 14,
   },
-  title: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#e5e7eb',
-    marginBottom: 6,
-  },
-  subtitle: {
-    fontSize: 13,
-    color: '#cbd5f5',
-    marginBottom: 16,
-  },
+  title: { fontSize: 18, fontWeight: '800', color: '#e5e7eb', marginBottom: 6 },
+  subtitle: { fontSize: 13, color: '#cbd5f5', marginBottom: 12 },
 
-  row: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
+  row: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   circleBtn: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: 'rgba(148,163,184,0.8)',
-    alignItems: 'center',
-    justifyContent: 'center',
+    width: 44, height: 44, borderRadius: 22, borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.8)', alignItems: 'center', justifyContent: 'center',
     backgroundColor: 'rgba(15,23,42,0.9)',
   },
-  circleBtnText: {
-    color: '#e5e7eb',
-    fontSize: 22,
-    fontWeight: '900',
-  },
-  daysBox: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  daysNumber: {
-    fontSize: 28,
-    fontWeight: '900',
-    color: '#4ade80',
-  },
-  daysLabel: {
-    marginTop: 4,
-    fontSize: 12,
-    color: '#cbd5f5',
-  },
+  circleBtnText: { color: '#e5e7eb', fontSize: 22, fontWeight: '900' },
 
-  sectionLabel: {
-    marginTop: 18,
-    marginBottom: 6,
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#e5e7eb',
-  },
-  chipsRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    columnGap: 8,
-    rowGap: 8,
-    marginBottom: 8,
-  },
-  chip: {
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
+  valueBox: { alignItems: 'center', justifyContent: 'center' },
+  valueNumber: { fontSize: 28, fontWeight: '900', color: '#4ade80' },
+  valueLabel: { marginTop: 4, fontSize: 12, color: '#cbd5f5' },
+
+  input: {
+    flex: 1,
+    marginHorizontal: 8,
     borderWidth: 1,
     borderColor: 'rgba(148,163,184,0.7)',
-    backgroundColor: 'rgba(15,23,42,0.9)',
-  },
-  chipActive: {
-    backgroundColor: 'rgba(34,197,94,0.25)',
-    borderColor: 'rgba(34,197,94,0.9)',
-  },
-  chipText: {
-    color: '#cbd5f5',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  chipTextActive: {
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
     color: '#e5e7eb',
+    backgroundColor: 'rgba(15,23,42,0.9)',
+    textAlign: 'center',
   },
 
-  helper: {
-    marginTop: 16,
-    fontSize: 12,
-    color: '#9ca3af',
+  sectionLabel: { marginTop: 14, marginBottom: 6, fontSize: 13, fontWeight: '700', color: '#e5e7eb' },
+  chipsRow: { flexDirection: 'row', flexWrap: 'wrap', columnGap: 8, rowGap: 8, marginBottom: 8 },
+  chip: {
+    paddingHorizontal: 10, paddingVertical: 6, borderRadius: 999, borderWidth: 1,
+    borderColor: 'rgba(148,163,184,0.7)', backgroundColor: 'rgba(15,23,42,0.9)',
   },
-  saveBtn: {
-    marginTop: 16,
-    paddingVertical: 12,
-    borderRadius: 12,
-    alignItems: 'center',
-    backgroundColor: '#0ea5e9',
+  chipActive: { backgroundColor: 'rgba(34,197,94,0.25)', borderColor: 'rgba(34,197,94,0.9)' },
+  chipText: { color: '#cbd5f5', fontSize: 12, fontWeight: '700' },
+  chipTextActive: { color: '#e5e7eb' },
+
+  helper: { marginTop: 8, fontSize: 12, color: '#9ca3af' },
+
+  actionsRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginTop: 8 },
+  saveBtn: { paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, alignItems: 'center', backgroundColor: '#0ea5e9' },
+  saveBtnText: { color: '#fff', fontWeight: '800', letterSpacing: 0.3 },
+
+  secondaryBtn: {
+    paddingVertical: 12, paddingHorizontal: 16, borderRadius: 12, alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.06)', borderWidth: 1, borderColor: 'rgba(148,163,184,0.7)',
   },
-  saveBtnText: {
-    color: '#fff',
-    fontWeight: '800',
-    letterSpacing: 0.3,
-  },
+  secondaryBtnText: { color: '#e5e7eb', fontWeight: '800', letterSpacing: 0.3 },
 });

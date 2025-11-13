@@ -426,7 +426,7 @@ export default function ProductList({ navigation }: Props) {
         <View style={{ flexDirection: 'row', alignItems: 'center' }}>
           <TouchableOpacity
             accessibilityLabel="Agregar producto"
-            onPress={() => { setExpiryOffset(5); setShowAdd(true); }}
+            onPress={() => { setExpiryOffset(expiryCfg.soonThresholdDays); setShowAdd(true); }}
             style={{
               paddingHorizontal: 12,
               paddingVertical: 4,
@@ -435,8 +435,9 @@ export default function ProductList({ navigation }: Props) {
             }}
           >
             <Text style={{ fontSize: 22, color: '#0a8f3c' }}>＋</Text>
-            <Text style={styles.smallBtnText}>⏱ +5d</Text>
+            <Text style={styles.smallBtnText}>⏱ +{expiryCfg.soonThresholdDays}d</Text>
           </TouchableOpacity>
+
 
           <TouchableOpacity
             accessibilityLabel="Ajustes de vencimiento"
@@ -448,7 +449,7 @@ export default function ProductList({ navigation }: Props) {
         </View>
       ),
     });
-  }, [navigation, setExpiryOffset]);
+  }, [navigation, setExpiryOffset, expiryCfg.soonThresholdDays]);
 
   // 3) Default de seguridad: si abres el modal por otra vía, propone +5d
   useEffect(() => {
@@ -1070,7 +1071,7 @@ export default function ProductList({ navigation }: Props) {
       <Text style={styles.emptySubtitle}>Agrega el primero para comenzar.</Text>
       <TouchableOpacity
         style={[styles.addButton, styles.primary]}
-        onPress={() => { setExpiryOffset(5); setShowAdd(true); }}  // ← ahora propone +5d
+        onPress={() => { setExpiryOffset(expiryCfg.soonThresholdDays); setShowAdd(true); }}
       >
         <Text style={styles.addButtonText}>Agregar producto</Text>
       </TouchableOpacity>
