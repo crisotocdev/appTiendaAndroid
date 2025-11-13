@@ -28,7 +28,7 @@ const normalizeDate = (v: any): string | null => {
 };
 
 // ————————————————————————————————————————————————————————
-// MIGRACIÓN SUAVE: crea tabla si falta y agrega columna next_expiry si no existe
+// MIGRACIÓN SUAVE: crea tabla si falta y agrega columnas si no existen
 try {
   run(
     `CREATE TABLE IF NOT EXISTS products (
@@ -42,11 +42,22 @@ try {
        unit TEXT,
        minStock INTEGER,
        qty INTEGER,
+       next_expiry TEXT,
        createdAt TEXT,
        updatedAt TEXT
      )`
   );
+  // columnas que podrían faltar en DB antiguas
+  try { run(`ALTER TABLE products ADD COLUMN photo_url TEXT`); } catch {}
+  try { run(`ALTER TABLE products ADD COLUMN photoUri TEXT`); } catch {}
+  try { run(`ALTER TABLE products ADD COLUMN unit TEXT`); } catch {}
+  try { run(`ALTER TABLE products ADD COLUMN minStock INTEGER`); } catch {}
   try { run(`ALTER TABLE products ADD COLUMN next_expiry TEXT`); } catch {}
+
+  // Índices útiles
+  try { run(`CREATE INDEX IF NOT EXISTS idx_products_name ON products(name)`); } catch {}
+  try { run(`CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku)`); } catch {}
+  try { run(`CREATE INDEX IF NOT EXISTS idx_products_updatedAt ON products(updatedAt)`); } catch {}
 } catch (e) {
   console.error('[ProductRepoSQLite.migration] error:', e);
 }
@@ -65,8 +76,8 @@ type Row = {
   qty: number | null;
   nextExpiry: string | null;
   daysToExpiry: number | null;
-  createdAt: string;
-  updatedAt: string;
+  createdAt: string | null;
+  updatedAt: string | null;
 };
 
 const SELECT_BASE = `
@@ -78,7 +89,7 @@ const SELECT_BASE = `
     COALESCE(photo_url, photoUri) AS photoUrl,
     brand,
     unit,
-    minStock,
+    COALESCE(minStock, 0) AS minStock,
     COALESCE(qty, 0) AS qty,
     next_expiry AS nextExpiry,
     CASE
@@ -92,28 +103,28 @@ const SELECT_BASE = `
 `;
 
 // Helper: mapea Row -> Product domain
-// 🔥 Aquí está el cambio clave: forzamos a que props tenga nextExpiry y daysToExpiry
+// 🔥 Nos aseguramos de que .props incluya nextExpiry y daysToExpiry
 const toDomain = (r: Row): Product => {
-  // Creamos el Product "normal"
   const base: any = Product.from({
     ...r,
     photoUri: r.photoUrl,
   });
-
-  // Nos aseguramos de que .props incluya vencimiento y daysToExpiry
   base.props = {
     ...(base.props || {}),
     nextExpiry: r.nextExpiry,
     daysToExpiry: r.daysToExpiry,
   };
-
   return base as Product;
 };
 
 export class ProductRepoSQLite implements ProductRepository {
+  // NEW: usado por notifications.ts (devuelve filas "raw" del SELECT)
+  async list(): Promise<Row[]> {
+    return all<Row>(`${SELECT_BASE} ORDER BY updatedAt DESC`);
+  }
+
   async getAll() {
     const rows = all<Row>(`${SELECT_BASE} ORDER BY updatedAt DESC`);
-    //console.log('[ProductRepoSQLite.getAll] count =', rows.length);
     return rows.map(toDomain);
   }
   listProducts() { return this.getAll(); }
@@ -139,19 +150,20 @@ export class ProductRepoSQLite implements ProductRepository {
       (input as any).photoUri,
       (input as any).photo
     );
-    const photo = typeof photoRaw === 'string' && photoRaw.trim() ? photoRaw.trim() : null;
+    const photo =
+      typeof photoRaw === 'string' && photoRaw.trim() ? photoRaw.trim() : null;
 
     const brand = input.brand?.trim() || null;
     const unit = (input as any).unit?.trim?.() || null;
 
     const minStock =
       typeof (input as any).minStock === 'number' && isFinite((input as any).minStock)
-        ? (input as any).minStock
+        ? Math.max(0, (input as any).minStock)
         : 0;
 
     const qtyIn =
       typeof (input as any).qty === 'number' && isFinite((input as any).qty)
-        ? (input as any).qty
+        ? Math.max(0, (input as any).qty)
         : undefined;
 
     const nextExpiryRaw = firstDefined(
@@ -162,11 +174,6 @@ export class ProductRepoSQLite implements ProductRepository {
       (input as any).expiryDate
     );
     const nextExpiry = normalizeDate(nextExpiryRaw);
-
-    console.log('[ProductRepoSQLite.upsert] expiry payload =', {
-      nextExpiryRaw,
-      nextExpiry,
-    });
 
     const exists = one<{ id: string }>(`SELECT id FROM products WHERE id=?`, [id]);
 
@@ -202,7 +209,6 @@ export class ProductRepoSQLite implements ProductRepository {
     }
 
     const row = one<Row>(`${SELECT_BASE} WHERE id=?`, [id])!;
-    console.log('[ProductRepoSQLite.upsert] row.nextExpiry =', row.nextExpiry);
     return toDomain(row);
   }
 
@@ -228,18 +234,21 @@ export class ProductRepoSQLite implements ProductRepository {
       payload?.photoUri,
       payload?.photo
     );
-    const photo = typeof photoRaw === 'string' && photoRaw.trim() ? photoRaw.trim() : null;
+    const photo =
+      typeof photoRaw === 'string' && photoRaw.trim() ? photoRaw.trim() : null;
 
     const unit = payload?.unit?.trim?.() || null;
     const minStock =
       typeof payload?.min_stock === 'number'
-        ? payload.min_stock
+        ? Math.max(0, payload.min_stock)
         : typeof payload?.minStock === 'number'
-        ? payload.minStock
+        ? Math.max(0, payload.minStock)
         : 0;
 
     const qty =
-      typeof payload?.qty === 'number' && isFinite(payload.qty) ? payload.qty : 0;
+      typeof payload?.qty === 'number' && isFinite(payload.qty)
+        ? Math.max(0, payload.qty)
+        : 0;
 
     const nextExpiryRaw = firstDefined(
       payload?.nextExpiry,
@@ -249,11 +258,6 @@ export class ProductRepoSQLite implements ProductRepository {
       payload?.expirationDate
     );
     const nextExpiry = normalizeDate(nextExpiryRaw);
-
-    console.log('[ProductRepoSQLite.createProduct] expiry payload =', {
-      nextExpiryRaw,
-      nextExpiry,
-    });
 
     run(
       `INSERT INTO products
@@ -276,14 +280,8 @@ export class ProductRepoSQLite implements ProductRepository {
   async updateProductExpiry(productId: string | number, expiryInput: any) {
     const id = String(productId);
     const now = dayjs().toISOString();
-
-    // Reusa tu normalizador DD/MM/AAAA o ISO → YYYY-MM-DD
     const nextExpiry = normalizeDate(expiryInput);
-
-    run(
-      `UPDATE products SET next_expiry=?, updatedAt=? WHERE id=?`,
-      [nextExpiry, now, id]
-    );
+    run(`UPDATE products SET next_expiry=?, updatedAt=? WHERE id=?`, [nextExpiry, now, id]);
   }
 
   async adjustStock(productId: string | number, delta: number) {

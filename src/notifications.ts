@@ -12,8 +12,7 @@ export const BACKGROUND_TASK_NAME = 'inventory-expiry-lowstock-check';
 
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
-    // `shouldShowAlert` está deprecado, lo dejamos en false
-    shouldShowAlert: false,
+    // 🔊 Sonido y badge como antes
     shouldPlaySound: true,
     shouldSetBadge: false,
 
