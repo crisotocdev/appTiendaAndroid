@@ -22,10 +22,11 @@ import * as ImagePicker from 'expo-image-picker';
 import { getExpiryInfo } from '../utils/expiry';
 import { refreshExpiryNotifications, notifyStockAlert } from '../notifications';
 import { getExpirySettings, EXPIRY_DEFAULTS } from '../settings/expirySettings';
+// 👇 ya NO usamos exportProductsCSV/JSON, todo se hace con handleExportInventario
+import { exportProductsJSON, importProductsJSON } from "../utils/backup";
+import { exportProductsCSV } from '../utils/exporters';
 
 
-// ✅ Config dinámica: solo usamos getExpiryWarningDays
-import { getExpiryWarningDays } from '../settings/expirySettings';
 
 type Props = NativeStackScreenProps<any>;
 
@@ -41,6 +42,7 @@ type ProductVM = {
   daysToExpiry?: number | null;
   minStock?: number | null;
 };
+
 
 type FilterMode = 'all' | 'aboutToExpire' | 'expired' | 'outOfStock' | 'lowStock';
 
@@ -296,13 +298,13 @@ export default function ProductList({ navigation }: Props) {
   const [expiryCfg, setExpiryCfg] = useState({ soonThresholdDays: 7, okThresholdDays: 30 });
 
   // Días dinámicos para el atajo +Xd (con fallback seguro)
-    const soonDays = useMemo(
-      () =>
-        Number.isFinite(Number(expiryCfg?.soonThresholdDays))
-          ? expiryCfg.soonThresholdDays
-          : EXPIRY_DEFAULTS.soonThresholdDays,
-      [expiryCfg]
-    );
+  const soonDays = useMemo(
+    () =>
+      Number.isFinite(Number(expiryCfg?.soonThresholdDays))
+        ? expiryCfg.soonThresholdDays
+        : EXPIRY_DEFAULTS.soonThresholdDays,
+    [expiryCfg]
+  );
 
   // Usamos la config para calcular el estado de vencimiento
   const expiryOf = useCallback(
@@ -314,28 +316,27 @@ export default function ProductList({ navigation }: Props) {
   );
 
   // ✅ Versión recomendada: lee ambos umbrales (soon + ok)
-    const loadExpiryCfg = useCallback(async () => {
-      try {
-        const cfg = await getExpirySettings();   // ← trae { soonThresholdDays, okThresholdDays }
-        setExpiryCfg(cfg);
-      } catch {
-        setExpiryCfg(EXPIRY_DEFAULTS);           // ← {7, 30} por defecto
-      }
-    }, []);
-
+  const loadExpiryCfg = useCallback(async () => {
+    try {
+      const cfg = await getExpirySettings();   // ← trae { soonThresholdDays, okThresholdDays }
+      setExpiryCfg(cfg);
+    } catch {
+      setExpiryCfg(EXPIRY_DEFAULTS);           // ← {7, 30} por defecto
+    }
+  }, []);
 
   // Presets de días para chips (únicos y > 0)
-    const presetDays = useMemo(
-      () =>
-        Array.from(
-          new Set(
-            [expiryCfg.soonThresholdDays, expiryCfg.okThresholdDays].filter(
-              (n) => Number.isFinite(n) && n > 0
-            )
+  const presetDays = useMemo(
+    () =>
+      Array.from(
+        new Set(
+          [expiryCfg.soonThresholdDays, expiryCfg.okThresholdDays].filter(
+            (n) => Number.isFinite(n) && n > 0
           )
-        ),
-      [expiryCfg]
-    );
+        )
+      ),
+    [expiryCfg]
+  );
 
   // Estado local - listado
   const [listState, setListState] = useState<any[]>([]);
@@ -415,7 +416,7 @@ export default function ProductList({ navigation }: Props) {
     }
   }, [app, reload]);
 
-  // 👆 helper de fecha para el botón del header y chips del modal (crear)
+  // 👆 helper de fecha para el botón del header y chips del modal (cada)
   const setExpiryOffset = useCallback((days: number) => {
     const d = new Date();
     d.setDate(d.getDate() + days);
@@ -443,46 +444,12 @@ export default function ProductList({ navigation }: Props) {
     loadExpiryCfg();
   }, [loadExpiryCfg]);
 
-  // 2) Header (botón ＋ ⏱ +5d y ⚙️)
-  useLayoutEffect(() => {
-  navigation.setOptions({
-    title: 'InventarioOp',
-    headerRight: () => (
-      <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-        <TouchableOpacity
-          accessibilityLabel={`Agregar producto (fecha por defecto +${soonDays}d)`}
-          onPress={() => { setExpiryOffset(soonDays); setShowAdd(true); }}
-          style={{
-            paddingHorizontal: 12,
-            paddingVertical: 4,
-            flexDirection: 'row',
-            alignItems: 'center',
-          }}
-        >
-          <Text style={{ fontSize: 22, color: '#0a8f3c' }}>＋</Text>
-          <Text style={styles.smallBtnText}>⏱ +{soonDays}d</Text>
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          accessibilityLabel="Ajustes de vencimiento"
-          onPress={() => navigation.navigate('ExpirySettings')}
-          style={{ marginLeft: 8, paddingHorizontal: 6, paddingVertical: 4 }}
-        >
-          <Text style={{ fontSize: 18 }}>⚙️</Text>
-        </TouchableOpacity>
-      </View>
-    ),
-  });
-}, [navigation, setExpiryOffset, soonDays]);
-
-
   // 3) Default de seguridad: propone +{soonThresholdDays}
   useEffect(() => {
     if (showAdd && !newExpiry) {
       setExpiryOffset(expiryCfg.soonThresholdDays);
     }
   }, [showAdd, newExpiry, setExpiryOffset, expiryCfg.soonThresholdDays]);
-
 
   const data: Array<ProductVM & { __skeleton?: boolean }> = useMemo(() => {
     const mapped =
@@ -642,6 +609,134 @@ export default function ProductList({ navigation }: Props) {
 
     return { total, expSoon, expired, outOfStock, lowStock };
   }, [data, expiryOf]);
+
+// ⬇️ Exportar inventario (CSV / JSON usando utils/exporters)
+const onExport = useCallback(() => {
+  const items = (data || []).filter(it => !(it as any).__skeleton);
+
+  if (!items.length) {
+    Alert.alert('Sin datos', 'No hay productos para exportar.');
+    return;
+  }
+
+  const rows = items.map((p: any) => {
+    const e = expiryOf(p.nextExpiry ?? null);
+    return {
+      id: p.id,
+      name: p.name,
+      brand: p.brand ?? '',
+      category: p.category ?? '',
+      sku: p.sku ?? '',
+      qty: Number(p.qty ?? 0),
+      minStock:
+        typeof p.minStock === 'number' && Number.isFinite(p.minStock)
+          ? p.minStock
+          : '',
+      nextExpiry: p.nextExpiry ?? '',
+      daysToExpiry: e.days ?? '',
+      expiryStatus: e.status,
+    };
+  });
+
+  Alert.alert(
+    'Exportar inventario',
+    'Elige el formato de exportación:',
+    [
+      {
+        text: 'CSV (Excel)',
+        onPress: () => {
+          (async () => {
+            try {
+              const uri = await exportProductsCSV(rows);
+              Alert.alert(
+                'CSV exportado',
+                uri.startsWith('content://')
+                  ? 'Archivo guardado en la carpeta que elegiste.'
+                  : `Archivo generado: ${uri}`
+              );
+            } catch (e: any) {
+              console.log('[ProductList] export CSV error', e);
+              Alert.alert(
+                'Error',
+                `No se pudo exportar el inventario en CSV.\n\n${e?.message ?? ''}`
+              );
+            }
+          })();
+        },
+      },
+      {
+        text: 'Backup (JSON)',
+        onPress: () => {
+          (async () => {
+            try {
+              const uri = await exportProductsJSON(rows);
+              Alert.alert(
+                'Backup exportado',
+                uri.startsWith('content://')
+                  ? 'Backup guardado en la carpeta que elegiste.'
+                  : `Backup generado: ${uri}`
+              );
+            } catch (e: any) {
+              console.log('[ProductList] export JSON error', e);
+              Alert.alert(
+                'Error',
+                `No se pudo exportar el backup en JSON.\n\n${e?.message ?? ''}`
+              );
+            }
+          })();
+        },
+      },
+      {
+        text: 'Cancelar',
+        style: 'cancel',
+      },
+    ],
+    { cancelable: true }
+  );
+}, [data, expiryOf]);
+
+  // Header (＋⏱, Exportar, ⚙️)
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      title: 'InventarioOp',
+      headerRight: () => (
+        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+          {/* ＋ ⏱ */}
+          <TouchableOpacity
+            accessibilityLabel={`Agregar producto (fecha por defecto +${soonDays}d)`}
+            onPress={() => { setExpiryOffset(soonDays); setShowAdd(true); }}
+            style={{
+              paddingHorizontal: 12,
+              paddingVertical: 4,
+              flexDirection: 'row',
+              alignItems: 'center',
+            }}
+          >
+            <Text style={{ fontSize: 22, color: '#0a8f3c' }}>＋</Text>
+            <Text style={styles.smallBtnText}>⏱ +{soonDays}d</Text>
+          </TouchableOpacity>
+
+          {/* 🗄️ Exportar */}
+          <TouchableOpacity
+            accessibilityLabel="Exportar inventario"
+            onPress={onExport}
+            style={{ marginLeft: 8, paddingHorizontal: 6, paddingVertical: 4 }}
+          >
+            <Text style={{ fontSize: 18 }}>🗄️</Text>
+          </TouchableOpacity>
+
+          {/* ⚙️ */}
+          <TouchableOpacity
+            accessibilityLabel="Ajustes de vencimiento"
+            onPress={() => navigation.navigate('ExpirySettings')}
+            style={{ marginLeft: 8, paddingHorizontal: 6, paddingVertical: 4 }}
+          >
+            <Text style={{ fontSize: 18 }}>⚙️</Text>
+          </TouchableOpacity>
+        </View>
+      ),
+    });
+  }, [navigation, setExpiryOffset, soonDays, onExport]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -1105,7 +1200,6 @@ export default function ProductList({ navigation }: Props) {
       </TouchableOpacity>
     </View>
   );
-
 
   return (
     <View style={styles.container}>
