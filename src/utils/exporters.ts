@@ -1,6 +1,6 @@
 // src/utils/exporters.ts
 import { Platform, Alert } from 'react-native';
-import * as FileSystem from 'expo-file-system/legacy'; // 👈 CAMBIO IMPORTANTE
+import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as Clipboard from 'expo-clipboard';
 
@@ -26,6 +26,11 @@ async function shareIfPossible(uri: string, mime: string, title: string) {
   const canShare = await Sharing.isAvailableAsync();
   if (canShare) {
     await Sharing.shareAsync(uri, { mimeType: mime, dialogTitle: title } as any);
+  } else {
+    Alert.alert(
+      'Compartir no disponible',
+      'Tu dispositivo no permite abrir el panel de compartir desde esta app.\n\nEl archivo igualmente quedó preparado en:\n' + uri
+    );
   }
 }
 
@@ -34,7 +39,7 @@ async function fallbackClipboard(data: string, kind: 'CSV' | 'JSON') {
     await Clipboard.setStringAsync(data);
     Alert.alert(
       `${kind} copiado`,
-      `El contenido se copió al portapapeles.\nÁbrelo en Excel y pega (Ctrl+V).`
+      `El contenido se copió al portapapeles.\nÁbrelo en Excel / editor de texto y pega (Ctrl+V).`
     );
     return `clipboard://${kind.toLowerCase()}`;
   } catch (e) {
@@ -56,14 +61,14 @@ async function writeWithSAFAndroid(name: string, data: string, mime: string): Pr
   }
 }
 
-async function writeToAppSandbox(name: string, data: string) {
+async function writeToAppSandbox(name: string, data: string, kind: 'CSV' | 'JSON') {
   const base =
     ((FileSystem as any).cacheDirectory as string | undefined) ??
     ((FileSystem as any).documentDirectory as string | undefined);
 
   if (!base) {
     // Expo Go en algunos dispositivos no expone rutas: usar clipboard
-    return fallbackClipboard(data, name.endsWith('.json') ? 'JSON' : 'CSV');
+    return fallbackClipboard(data, kind);
   }
 
   const uri = base + name;
@@ -71,49 +76,119 @@ async function writeToAppSandbox(name: string, data: string) {
   return uri;
 }
 
-export async function exportProductsCSV(rows: Row[], filename?: string) {
+/** Helpers para construir datos **/
+
+type BuiltPayload = {
+  data: string;
+  name: string;
+  mime: string;
+  kind: 'CSV' | 'JSON';
+};
+
+function buildCSV(rows: Row[], filename?: string): BuiltPayload {
   const cols = [
-    'id','name','brand','category','sku',
-    'qty','minStock','nextExpiry','daysToExpiry','expiryStatus',
+    'id',
+    'name',
+    'brand',
+    'category',
+    'sku',
+    'qty',
+    'minStock',
+    'nextExpiry',
+    'daysToExpiry',
+    'expiryStatus',
   ];
+
   const header = cols.join(',');
-  const body = rows.map(r => cols.map(c => escapeCSV(r[c])).join(',')).join('\n');
+  const body = rows
+    .map((r) => cols.map((c) => escapeCSV(r[c])).join(','))
+    .join('\n');
   const csv = `${header}\n${body}\n`;
 
   const name = filename ?? `inventory-export_${timestamp()}.csv`;
   const mime = 'text/csv';
 
-  // 1) ANDROID: intentar SAF (elegir carpeta)
+  return { data: csv, name, mime, kind: 'CSV' };
+}
+
+function buildJSON(rows: Row[], filename?: string): BuiltPayload {
+  const json = JSON.stringify(rows, null, 2);
+  const name = filename ?? `inventory-export_${timestamp()}.json`;
+  const mime = 'application/json';
+
+  return { data: json, name, mime, kind: 'JSON' };
+}
+
+/** Guardar (pensado para "Guardar en dispositivo") **/
+async function saveBuilt(payload: BuiltPayload): Promise<string> {
+  const { data, name, mime, kind } = payload;
+
+  // 1) ANDROID: intentar SAF (elegir carpeta REAL)
   if (Platform.OS === 'android') {
-    const safUri = await writeWithSAFAndroid(name, csv, mime);
+    const safUri = await writeWithSAFAndroid(name, data, mime);
     if (safUri) {
-      await shareIfPossible(safUri, mime, 'Exportar inventario (CSV)');
       return safUri;
     }
   }
 
   // 2) Sandbox o Clipboard
-  const result = await writeToAppSandbox(name, csv);
-  if (result.startsWith('clipboard://')) return result;
-  await shareIfPossible(result, mime, 'Exportar inventario (CSV)');
-  return result;
+  return writeToAppSandbox(name, data, kind);
+}
+
+/** Compartir (NO usa SAF, solo sandbox + compartir) **/
+async function shareBuilt(payload: BuiltPayload, title: string): Promise<string> {
+  const { data, name, mime, kind } = payload;
+
+  const base =
+    ((FileSystem as any).cacheDirectory as string | undefined) ??
+    ((FileSystem as any).documentDirectory as string | undefined);
+
+  let uri: string;
+
+  if (!base) {
+    // Sin carpeta → portapapeles
+    uri = await fallbackClipboard(data, kind);
+  } else {
+    uri = base + name;
+    await FileSystem.writeAsStringAsync(uri, data, { encoding: Encoding.UTF8 });
+  }
+
+  if (!uri.startsWith('clipboard://')) {
+    await shareIfPossible(uri, mime, title);
+  }
+
+  return uri;
+}
+
+/** EXPORTS PÚBLICOS **/
+
+// 👉 Solo guarda el archivo (si no hay ruta, cae a portapapeles)
+export async function saveProductsCSV(rows: Row[], filename?: string) {
+  const b = buildCSV(rows, filename);
+  return saveBuilt(b);
+}
+
+export async function saveProductsJSON(rows: Row[], filename?: string) {
+  const b = buildJSON(rows, filename);
+  return saveBuilt(b);
+}
+
+// 👉 Guarda en sandbox y luego abre el diálogo de compartir
+export async function shareProductsCSV(rows: Row[], filename?: string) {
+  const b = buildCSV(rows, filename);
+  return shareBuilt(b, 'Compartir inventario (CSV)');
+}
+
+export async function shareProductsJSON(rows: Row[], filename?: string) {
+  const b = buildJSON(rows, filename);
+  return shareBuilt(b, 'Compartir inventario (JSON)');
+}
+
+// Compat: por si en otro lado usas todavía estos nombres
+export async function exportProductsCSV(rows: Row[], filename?: string) {
+  return shareProductsCSV(rows, filename);
 }
 
 export async function exportProductsJSON(rows: Row[], filename?: string) {
-  const json = JSON.stringify(rows, null, 2);
-  const name = filename ?? `inventory-export_${timestamp()}.json`;
-  const mime = 'application/json';
-
-  if (Platform.OS === 'android') {
-    const safUri = await writeWithSAFAndroid(name, json, mime);
-    if (safUri) {
-      await shareIfPossible(safUri, mime, 'Exportar inventario (JSON)');
-      return safUri;
-    }
-  }
-
-  const result = await writeToAppSandbox(name, json);
-  if (result.startsWith('clipboard://')) return result;
-  await shareIfPossible(result, mime, 'Exportar inventario (JSON)');
-  return result;
+  return shareProductsJSON(rows, filename);
 }

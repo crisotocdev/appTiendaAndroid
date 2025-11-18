@@ -22,11 +22,14 @@ import * as ImagePicker from 'expo-image-picker';
 import { getExpiryInfo } from '../utils/expiry';
 import { refreshExpiryNotifications, notifyStockAlert } from '../notifications';
 import { getExpirySettings, EXPIRY_DEFAULTS } from '../settings/expirySettings';
-// 👇 ya NO usamos exportProductsCSV/JSON, todo se hace con handleExportInventario
-import { exportProductsJSON, importProductsJSON } from "../utils/backup";
-import { exportProductsCSV } from '../utils/exporters';
 
-
+// ✅ SOLO estos desde exporters.ts
+import {
+  saveProductsCSV,
+  saveProductsJSON,
+  shareProductsCSV,
+  shareProductsJSON,
+} from '../utils/exporters';
 
 type Props = NativeStackScreenProps<any>;
 
@@ -42,7 +45,6 @@ type ProductVM = {
   daysToExpiry?: number | null;
   minStock?: number | null;
 };
-
 
 type FilterMode = 'all' | 'aboutToExpire' | 'expired' | 'outOfStock' | 'lowStock';
 
@@ -416,7 +418,7 @@ export default function ProductList({ navigation }: Props) {
     }
   }, [app, reload]);
 
-  // 👆 helper de fecha para el botón del header y chips del modal (cada)
+  // 👆 helper de fecha para el botón del header y chips del modal (alta)
   const setExpiryOffset = useCallback((days: number) => {
     const d = new Date();
     d.setDate(d.getDate() + days);
@@ -610,90 +612,155 @@ export default function ProductList({ navigation }: Props) {
     return { total, expSoon, expired, outOfStock, lowStock };
   }, [data, expiryOf]);
 
-// ⬇️ Exportar inventario (CSV / JSON usando utils/exporters)
-const onExport = useCallback(() => {
-  const items = (data || []).filter(it => !(it as any).__skeleton);
+  // 🔧 Helper común para armar filas de exportación (CSV/JSON)
+  const buildExportRows = useCallback(() => {
+    const items = (data || []).filter((it) => !(it as any).__skeleton);
 
-  if (!items.length) {
-    Alert.alert('Sin datos', 'No hay productos para exportar.');
-    return;
-  }
+    return items.map((p: any) => {
+      const e = expiryOf(p.nextExpiry ?? null);
+      return {
+        id: p.id,
+        name: p.name,
+        brand: p.brand ?? '',
+        category: p.category ?? '',
+        sku: p.sku ?? '',
+        qty: Number(p.qty ?? 0),
+        minStock:
+          typeof p.minStock === 'number' && Number.isFinite(p.minStock)
+            ? p.minStock
+            : '',
+        nextExpiry: p.nextExpiry ?? '',
+        daysToExpiry: e.days ?? '',
+        expiryStatus: e.status,
+      };
+    });
+  }, [data, expiryOf]);
 
-  const rows = items.map((p: any) => {
-    const e = expiryOf(p.nextExpiry ?? null);
-    return {
-      id: p.id,
-      name: p.name,
-      brand: p.brand ?? '',
-      category: p.category ?? '',
-      sku: p.sku ?? '',
-      qty: Number(p.qty ?? 0),
-      minStock:
-        typeof p.minStock === 'number' && Number.isFinite(p.minStock)
-          ? p.minStock
-          : '',
-      nextExpiry: p.nextExpiry ?? '',
-      daysToExpiry: e.days ?? '',
-      expiryStatus: e.status,
-    };
-  });
+  // 📤 CSV: guardar o compartir
+  const handleExportCSV = useCallback(
+    async (mode: 'save' | 'share') => {
+      try {
+        const rows = buildExportRows();
+        if (!rows.length) {
+          Alert.alert('Sin datos', 'No hay productos para exportar.');
+          return;
+        }
 
-  Alert.alert(
-    'Exportar inventario',
-    'Elige el formato de exportación:',
-    [
-      {
-        text: 'CSV (Excel)',
-        onPress: () => {
-          (async () => {
-            try {
-              const uri = await exportProductsCSV(rows);
-              Alert.alert(
-                'CSV exportado',
-                uri.startsWith('content://')
-                  ? 'Archivo guardado en la carpeta que elegiste.'
-                  : `Archivo generado: ${uri}`
-              );
-            } catch (e: any) {
-              console.log('[ProductList] export CSV error', e);
-              Alert.alert(
-                'Error',
-                `No se pudo exportar el inventario en CSV.\n\n${e?.message ?? ''}`
-              );
-            }
-          })();
-        },
-      },
-      {
-        text: 'Backup (JSON)',
-        onPress: () => {
-          (async () => {
-            try {
-              const uri = await exportProductsJSON(rows);
-              Alert.alert(
-                'Backup exportado',
-                uri.startsWith('content://')
-                  ? 'Backup guardado en la carpeta que elegiste.'
-                  : `Backup generado: ${uri}`
-              );
-            } catch (e: any) {
-              console.log('[ProductList] export JSON error', e);
-              Alert.alert(
-                'Error',
-                `No se pudo exportar el backup en JSON.\n\n${e?.message ?? ''}`
-              );
-            }
-          })();
-        },
-      },
-      {
-        text: 'Cancelar',
-        style: 'cancel',
-      },
-    ],
-    { cancelable: true }
+        const uri =
+          mode === 'save'
+            ? await saveProductsCSV(rows)
+            : await shareProductsCSV(rows);
+
+        if (uri.startsWith('clipboard://')) {
+          // El mensaje ya lo muestra fallbackClipboard
+          return;
+        }
+
+        if (mode === 'save') {
+          Alert.alert(
+            'CSV guardado',
+            uri.startsWith('content://')
+              ? 'Archivo CSV guardado en la carpeta que elegiste.'
+              : `Archivo CSV guardado en: ${uri}`
+          );
+        } else {
+          Alert.alert(
+            'CSV compartido',
+            'Se abrió el panel para compartir el archivo (WhatsApp, Gmail, Drive, etc.).'
+          );
+        }
+      } catch (e: any) {
+        console.log('[ProductList] export CSV error', e);
+        Alert.alert(
+          'Error',
+          `No se pudo exportar el inventario en CSV.\n\n${e?.message ?? ''}`
+        );
+      }
+    },
+    [buildExportRows]
   );
-}, [data, expiryOf]);
+
+  // 📤 JSON (backup): guardar o compartir
+  const handleExportJSON = useCallback(
+    async (mode: 'save' | 'share') => {
+      try {
+        const rows = buildExportRows();
+        if (!rows.length) {
+          Alert.alert('Sin datos', 'No hay productos para exportar.');
+          return;
+        }
+
+        const uri =
+          mode === 'save'
+            ? await saveProductsJSON(rows)
+            : await shareProductsJSON(rows);
+
+        if (uri.startsWith('clipboard://')) {
+          return;
+        }
+
+        if (mode === 'save') {
+          Alert.alert(
+            'Backup guardado',
+            uri.startsWith('content://')
+              ? 'Backup JSON guardado en la carpeta que elegiste.'
+              : `Backup JSON guardado en: ${uri}`
+          );
+        } else {
+          Alert.alert(
+            'Backup compartido',
+            'Se abrió el panel para compartir el backup (WhatsApp, Gmail, Drive, etc.).'
+          );
+        }
+      } catch (e: any) {
+        console.log('[ProductList] export JSON error', e);
+        Alert.alert(
+          'Error',
+          `No se pudo exportar el backup (JSON).\n\n${e?.message ?? ''}`
+        );
+      }
+    },
+    [buildExportRows]
+  );
+
+  // 🗄️ Menú: primero elegir CSV/JSON, luego guardar/compartir
+  const openExportMenu = useCallback(() => {
+    Alert.alert('Exportar / backup', '¿Qué deseas hacer?', [
+      {
+        text: 'Backup JSON',
+        onPress: () => {
+          Alert.alert('Backup JSON', '¿Cómo quieres hacerlo?', [
+            {
+              text: 'Guardar en dispositivo',
+              onPress: () => handleExportJSON('save'),
+            },
+            {
+              text: 'Compartir',
+              onPress: () => handleExportJSON('share'),
+            },
+            { text: 'Cancelar', style: 'cancel' },
+          ]);
+        },
+      },
+      {
+        text: 'Exportar CSV',
+        onPress: () => {
+          Alert.alert('Exportar CSV', '¿Cómo quieres hacerlo?', [
+            {
+              text: 'Guardar en dispositivo',
+              onPress: () => handleExportCSV('save'),
+            },
+            {
+              text: 'Compartir',
+              onPress: () => handleExportCSV('share'),
+            },
+            { text: 'Cancelar', style: 'cancel' },
+          ]);
+        },
+      },
+      { text: 'Salir', style: 'cancel' },
+    ]);
+  }, [handleExportCSV, handleExportJSON]);
 
   // Header (＋⏱, Exportar, ⚙️)
   useLayoutEffect(() => {
@@ -704,7 +771,10 @@ const onExport = useCallback(() => {
           {/* ＋ ⏱ */}
           <TouchableOpacity
             accessibilityLabel={`Agregar producto (fecha por defecto +${soonDays}d)`}
-            onPress={() => { setExpiryOffset(soonDays); setShowAdd(true); }}
+            onPress={() => {
+              setExpiryOffset(soonDays);
+              setShowAdd(true);
+            }}
             style={{
               paddingHorizontal: 12,
               paddingVertical: 4,
@@ -719,13 +789,13 @@ const onExport = useCallback(() => {
           {/* 🗄️ Exportar */}
           <TouchableOpacity
             accessibilityLabel="Exportar inventario"
-            onPress={onExport}
+            onPress={openExportMenu}
             style={{ marginLeft: 8, paddingHorizontal: 6, paddingVertical: 4 }}
           >
             <Text style={{ fontSize: 18 }}>🗄️</Text>
           </TouchableOpacity>
 
-          {/* ⚙️ */}
+          {/* ⚙️ Ajustes vencimiento */}
           <TouchableOpacity
             accessibilityLabel="Ajustes de vencimiento"
             onPress={() => navigation.navigate('ExpirySettings')}
@@ -736,7 +806,7 @@ const onExport = useCallback(() => {
         </View>
       ),
     });
-  }, [navigation, setExpiryOffset, soonDays, onExport]);
+  }, [navigation, soonDays, openExportMenu, setExpiryOffset]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
