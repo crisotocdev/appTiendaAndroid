@@ -21,7 +21,7 @@ export default function RootNavigation() {
       <Stack.Navigator>
         <Stack.Screen
           name="ProductList"
-          component={ProductList}
+          component={ProductList}           
           options={{ title: 'Inventario' }}
         />
         <Stack.Screen

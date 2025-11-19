@@ -1,5 +1,11 @@
 // src/screens/ProductList.tsx
-import React, { useCallback, useMemo, useState, useLayoutEffect, useEffect } from 'react';
+import React, {
+  useCallback,
+  useMemo,
+  useState,
+  useLayoutEffect,
+  useEffect,
+} from 'react';
 import {
   View,
   Text,
@@ -20,11 +26,18 @@ import { useApp } from '../ui/providers/AppProvider';
 import productRepo from '../infrastructure/persistence/sqlite/ProductRepoSQLite';
 import * as ImagePicker from 'expo-image-picker';
 import { getExpiryInfo } from '../utils/expiry';
-import { refreshExpiryNotifications, notifyStockAlert } from '../notifications';
-import { getExpirySettings, EXPIRY_DEFAULTS } from '../settings/expirySettings';
-
-// ✅ SOLO estos desde exporters.ts
 import {
+  refreshExpiryNotifications,
+  notifyStockAlert,
+} from '../notifications';
+import {
+  getExpirySettings,
+  EXPIRY_DEFAULTS,
+} from '../settings/expirySettings';
+
+// ✅ Import único desde exporters.ts
+import {
+  backupRowsToJSON,
   saveProductsCSV,
   saveProductsJSON,
   shareProductsCSV,
@@ -46,11 +59,19 @@ type ProductVM = {
   minStock?: number | null;
 };
 
-type FilterMode = 'all' | 'aboutToExpire' | 'expired' | 'outOfStock' | 'lowStock';
+type FilterMode =
+  | 'all'
+  | 'aboutToExpire'
+  | 'expired'
+  | 'outOfStock'
+  | 'lowStock';
 
 const SKELETON_COUNT = 5;
 
-function getStockStatus(qty: number, minStock: number): 'none' | 'low' | 'ok' {
+function getStockStatus(
+  qty: number,
+  minStock: number
+): 'none' | 'low' | 'ok' {
   if (qty <= 0) return 'none';
   if (minStock > 0 && qty <= minStock) return 'low';
   return 'ok';
@@ -106,9 +127,15 @@ function pickExpiry(q: any): string | null {
 function methodRunner(u: any): ((arg?: any) => Promise<any>) | null {
   if (typeof u === 'function') return (arg?: any) => u(arg);
   if (u && typeof u === 'object') {
-    const m = ['execute', 'run', 'call', 'handler', 'invoke', 'mutate', 'perform'].find(
-      (k) => typeof (u as any)[k] === 'function'
-    );
+    const m = [
+      'execute',
+      'run',
+      'call',
+      'handler',
+      'invoke',
+      'mutate',
+      'perform',
+    ].find((k) => typeof (u as any)[k] === 'function');
     if (m) return (arg?: any) => (u as any)[m](arg);
   }
   return null;
@@ -118,15 +145,26 @@ function methodRunner(u: any): ((arg?: any) => Promise<any>) | null {
 function pickCreateFn(app: any) {
   const uc = app?.usecases;
   const candidates = [
-    app?.createProduct, app?.actions?.createProduct,
-    app?.addProduct, app?.actions?.addProduct,
-    app?.upsertProduct, app?.actions?.upsertProduct,
-    uc?.createProduct, uc?.addProduct, uc?.upsertProduct,
-    uc?.products?.create, uc?.products?.add, uc?.products?.upsert,
-    uc?.product?.create, uc?.product?.add,
-    app?.products?.create, app?.repo?.products?.create,
+    app?.createProduct,
+    app?.actions?.createProduct,
+    app?.addProduct,
+    app?.actions?.addProduct,
+    app?.upsertProduct,
+    app?.actions?.upsertProduct,
+    uc?.createProduct,
+    uc?.addProduct,
+    uc?.upsertProduct,
+    uc?.products?.create,
+    uc?.products?.add,
+    uc?.products?.upsert,
+    uc?.product?.create,
+    uc?.product?.add,
+    app?.products?.create,
+    app?.repo?.products?.create,
     app?.repositories?.products?.create,
-    app?.service?.products?.create, app?.api?.products?.create, app?.db?.products?.create,
+    app?.service?.products?.create,
+    app?.api?.products?.create,
+    app?.db?.products?.create,
   ];
   for (const c of candidates) {
     const r = methodRunner(c);
@@ -136,9 +174,13 @@ function pickCreateFn(app: any) {
     if (!obj || typeof obj !== 'object' || depth > 3) return null;
     for (const [k, v] of Object.entries(obj)) {
       if (/create|add|upsert/i.test(k) && /product/i.test(k)) {
-        const r = methodRunner(v); if (r) return r;
+        const r = methodRunner(v);
+        if (r) return r;
       }
-      if (v && typeof v === 'object') { const w = walk(v, depth + 1); if (w) return w; }
+      if (v && typeof v === 'object') {
+        const w = walk(v, depth + 1);
+        if (w) return w;
+      }
     }
     return null;
   }
@@ -149,12 +191,18 @@ function pickCreateFn(app: any) {
 function pickSaveFn(app: any) {
   const uc = app?.usecases;
   const candidates = [
-    app?.upsertProduct, app?.updateProduct,
-    app?.actions?.upsertProduct, app?.actions?.updateProduct,
-    uc?.upsertProduct, uc?.updateProduct,
-    uc?.products?.upsert, uc?.products?.update,
-    app?.products?.upsert, app?.products?.update,
-    app?.repo?.products?.upsert, app?.repositories?.products?.upsert,
+    app?.upsertProduct,
+    app?.updateProduct,
+    app?.actions?.upsertProduct,
+    app?.actions?.updateProduct,
+    uc?.upsertProduct,
+    uc?.updateProduct,
+    uc?.products?.upsert,
+    uc?.products?.update,
+    app?.products?.upsert,
+    app?.products?.update,
+    app?.repo?.products?.upsert,
+    app?.repositories?.products?.upsert,
   ];
   for (const c of candidates) {
     const r = methodRunner(c);
@@ -164,9 +212,13 @@ function pickSaveFn(app: any) {
     if (!obj || typeof obj !== 'object' || depth > 3) return null;
     for (const [k, v] of Object.entries(obj)) {
       if (/(upsert|update)/i.test(k) && /product/i.test(k)) {
-        const r = methodRunner(v); if (r) return r;
+        const r = methodRunner(v);
+        if (r) return r;
       }
-      if (v && typeof v === 'object') { const w = walk(v, depth + 1); if (w) return w; }
+      if (v && typeof v === 'object') {
+        const w = walk(v, depth + 1);
+        if (w) return w;
+      }
     }
     return null;
   }
@@ -177,11 +229,18 @@ function pickSaveFn(app: any) {
 function pickListFn(app: any) {
   const uc = app?.usecases;
   const candidates = [
-    uc?.listProducts, uc?.getProducts, uc?.fetchProducts,
-    uc?.products?.list, uc?.products?.getAll, uc?.products?.fetchAll,
-    uc?.product?.list, uc?.inventory?.listProducts,
-    app?.listProducts, app?.fetchProducts,
-    app?.repo?.products?.list, app?.repositories?.products?.list,
+    uc?.listProducts,
+    uc?.getProducts,
+    uc?.fetchProducts,
+    uc?.products?.list,
+    uc?.products?.getAll,
+    uc?.products?.fetchAll,
+    uc?.product?.list,
+    uc?.inventory?.listProducts,
+    app?.listProducts,
+    app?.fetchProducts,
+    app?.repo?.products?.list,
+    app?.repositories?.products?.list,
   ];
   for (const c of candidates) {
     const r = methodRunner(c);
@@ -191,9 +250,13 @@ function pickListFn(app: any) {
     if (!obj || typeof obj !== 'object' || depth > 3) return null;
     for (const [k, v] of Object.entries(obj)) {
       if (/(list|get|fetch)/i.test(k) && /product/i.test(k)) {
-        const r = methodRunner(v); if (r) return r;
+        const r = methodRunner(v);
+        if (r) return r;
       }
-      if (v && typeof v === 'object') { const w = walk(v, depth + 1); if (w) return w; }
+      if (v && typeof v === 'object') {
+        const w = walk(v, depth + 1);
+        if (w) return w;
+      }
     }
     return null;
   }
@@ -202,11 +265,30 @@ function pickListFn(app: any) {
 
 function extractList(res: any): any[] {
   if (Array.isArray(res)) return res;
-  const flats = [res?.items, res?.products, res?.rows, res?.results, res?.list, res?.value, res?.values, res?.payload, res?.data];
+  const flats = [
+    res?.items,
+    res?.products,
+    res?.rows,
+    res?.results,
+    res?.list,
+    res?.value,
+    res?.values,
+    res?.payload,
+    res?.data,
+  ];
   for (const a of flats) if (Array.isArray(a)) return a;
   const d = res?.data;
   if (d) {
-    const nested = [d?.items, d?.products, d?.rows, d?.results, d?.list, d?.value, d?.values, d?.payload];
+    const nested = [
+      d?.items,
+      d?.products,
+      d?.rows,
+      d?.results,
+      d?.list,
+      d?.value,
+      d?.values,
+      d?.payload,
+    ];
     for (const a of nested) if (Array.isArray(a)) return a;
   }
   if (res && typeof res === 'object') {
@@ -225,13 +307,6 @@ function extractList(res: any): any[] {
     }
   }
   return [];
-}
-
-function preview10(obj: any) {
-  if (!obj || typeof obj !== 'object') return obj;
-  const o: any = {};
-  Object.keys(obj).slice(0, 10).forEach(k => (o[k] = (obj as any)[k]));
-  return o;
 }
 
 async function tryListWithPayloads(fn: Function) {
@@ -254,20 +329,36 @@ async function tryListWithPayloads(fn: Function) {
 function pickUpdateQtyFn(app: any) {
   const uc = app?.usecases;
   const c = [
-    uc?.updateProduct, uc?.products?.update, uc?.product?.update,
-    uc?.products?.setQty, uc?.product?.setQty,
-    uc?.inventory?.setQty, uc?.stock?.set,
-    app?.updateProduct, app?.products?.update,
-    app?.repo?.products?.update, app?.repositories?.products?.update,
+    uc?.updateProduct,
+    uc?.products?.update,
+    uc?.product?.update,
+    uc?.products?.setQty,
+    uc?.product?.setQty,
+    uc?.inventory?.setQty,
+    uc?.stock?.set,
+    app?.updateProduct,
+    app?.products?.update,
+    app?.repo?.products?.update,
+    app?.repositories?.products?.update,
   ];
-  for (const cand of c) { const r = methodRunner(cand); if (r) return r; }
+  for (const cand of c) {
+    const r = methodRunner(cand);
+    if (r) return r;
+  }
   function walk(o: any, d = 0): any {
     if (!o || typeof o !== 'object' || d > 3) return null;
     for (const [k, v] of Object.entries(o)) {
-      if (/(update|set)/i.test(k) && /(product|stock|qty|quantity)/i.test(k)) {
-        const r = methodRunner(v); if (r) return r;
+      if (
+        /(update|set)/i.test(k) &&
+        /(product|stock|qty|quantity)/i.test(k)
+      ) {
+        const r = methodRunner(v);
+        if (r) return r;
       }
-      if (v && typeof v === 'object') { const w = walk(v, d + 1); if (w) return w; }
+      if (v && typeof v === 'object') {
+        const w = walk(v, d + 1);
+        if (w) return w;
+      }
     }
     return null;
   }
@@ -282,14 +373,26 @@ async function tryUpdateQtyWithPayloads(
 ) {
   const base = row?.props ?? row ?? {};
   const trials = [
-    { id, qty }, { productId: id, qty },
-    { id, quantity: qty }, { productId: id, quantity: qty },
-    { id, stock: qty }, { product: { id, qty } },
+    { id, qty },
+    { productId: id, qty },
+    { id, quantity: qty },
+    { productId: id, quantity: qty },
+    { id, stock: qty },
+    { product: { id, qty } },
     { ...base, id, qty },
   ];
   let last: any = null;
-  for (const t of trials) { try { await run(t); return; } catch (e) { last = e; } }
-  throw last ?? new Error('No pude actualizar qty con los formatos probados');
+  for (const t of trials) {
+    try {
+      await run(t);
+      return;
+    } catch (e) {
+      last = e;
+    }
+  }
+  throw last ?? new Error(
+    'No pude actualizar qty con los formatos probados'
+  );
 }
 
 /** Componente **/
@@ -297,7 +400,10 @@ export default function ProductList({ navigation }: Props) {
   const app = useApp() as any;
 
   // ✅ Estado local para config de vencimiento (por defecto 7/30)
-  const [expiryCfg, setExpiryCfg] = useState({ soonThresholdDays: 7, okThresholdDays: 30 });
+  const [expiryCfg, setExpiryCfg] = useState({
+    soonThresholdDays: 7,
+    okThresholdDays: 30,
+  });
 
   // Días dinámicos para el atajo +Xd (con fallback seguro)
   const soonDays = useMemo(
@@ -310,20 +416,21 @@ export default function ProductList({ navigation }: Props) {
 
   // Usamos la config para calcular el estado de vencimiento
   const expiryOf = useCallback(
-    (date?: string | null) => getExpiryInfo(date, {
-      soonThresholdDays: expiryCfg.soonThresholdDays,
-      okThresholdDays: expiryCfg.okThresholdDays,
-    }),
+    (date?: string | null) =>
+      getExpiryInfo(date, {
+        soonThresholdDays: expiryCfg.soonThresholdDays,
+        okThresholdDays: expiryCfg.okThresholdDays,
+      }),
     [expiryCfg]
   );
 
   // ✅ Versión recomendada: lee ambos umbrales (soon + ok)
   const loadExpiryCfg = useCallback(async () => {
     try {
-      const cfg = await getExpirySettings();   // ← trae { soonThresholdDays, okThresholdDays }
+      const cfg = await getExpirySettings(); // ← trae { soonThresholdDays, okThresholdDays }
       setExpiryCfg(cfg);
     } catch {
-      setExpiryCfg(EXPIRY_DEFAULTS);           // ← {7, 30} por defecto
+      setExpiryCfg(EXPIRY_DEFAULTS); // ← {7, 30} por defecto
     }
   }, []);
 
@@ -386,10 +493,13 @@ export default function ProductList({ navigation }: Props) {
 
   // Fuente de datos “segura”
   const rawProducts: any[] =
-    (Array.isArray(listState) && listState.length > 0) ? listState
-    : Array.isArray(app?.products) ? app.products
-    : Array.isArray(app?.state?.products) ? app.state.products
-    : [];
+    Array.isArray(listState) && listState.length > 0
+      ? listState
+      : Array.isArray(app?.products)
+      ? app.products
+      : Array.isArray(app?.state?.products)
+      ? app.state.products
+      : [];
 
   const fetch = useCallback(async () => {
     setLoading(true);
@@ -400,14 +510,18 @@ export default function ProductList({ navigation }: Props) {
         setListState(arr || []);
       } else if (typeof reload === 'function') {
         await reload();
-        const fallback =
-          Array.isArray(app?.products) ? app.products :
-          Array.isArray(app?.state?.products) ? app.state.products : [];
+        const fallback = Array.isArray(app?.products)
+          ? app.products
+          : Array.isArray(app?.state?.products)
+          ? app.state.products
+          : [];
         setListState(fallback);
       } else {
-        const fallback =
-          Array.isArray(app?.products) ? app.products :
-          Array.isArray(app?.state?.products) ? app.state.products : [];
+        const fallback = Array.isArray(app?.products)
+          ? app.products
+          : Array.isArray(app?.state?.products)
+          ? app.state.products
+          : [];
         setListState(fallback);
       }
     } catch (e) {
@@ -460,7 +574,12 @@ export default function ProductList({ navigation }: Props) {
           const q = p?.props ?? p;
 
           const id = String(
-            q?.id ?? q?.uuid ?? q?._id ?? q?.product_id ?? q?.pk ?? ''
+            q?.id ??
+              q?.uuid ??
+              q?._id ??
+              q?.product_id ??
+              q?.pk ??
+              ''
           );
 
           const nameRaw =
@@ -471,7 +590,9 @@ export default function ProductList({ navigation }: Props) {
             q?.productName ??
             '';
 
-          const name = oneLine(nameRaw) || (id ? `Producto ${id}` : 'Producto s/n');
+          const name =
+            oneLine(nameRaw) ||
+            (id ? `Producto ${id}` : 'Producto s/n');
 
           const nextExpiry = pickExpiry(q);
           const expiry = expiryOf(nextExpiry ?? null);
@@ -482,16 +603,23 @@ export default function ProductList({ navigation }: Props) {
               : Number(q?.qty ?? q?.cantidad ?? q?.stock ?? 0) || 0;
 
           const minStock =
-            typeof q?.minStock === 'number' && Number.isFinite(q.minStock)
+            typeof q?.minStock === 'number' &&
+            Number.isFinite(q.minStock)
               ? q.minStock
-              : typeof q?.min_stock === 'number' && Number.isFinite(q.min_stock)
+              : typeof q?.min_stock === 'number' &&
+                Number.isFinite(q.min_stock)
               ? q.min_stock
-              : typeof q?.stockMin === 'number' && Number.isFinite(q.stockMin)
+              : typeof q?.stockMin === 'number' &&
+                Number.isFinite(q.stockMin)
               ? q.stockMin
               : Number.isFinite(
-                  Number(q?.minStock ?? q?.min_stock ?? q?.stockMin)
+                  Number(
+                    q?.minStock ?? q?.min_stock ?? q?.stockMin
+                  )
                 )
-              ? Number(q?.minStock ?? q?.min_stock ?? q?.stockMin)
+              ? Number(
+                  q?.minStock ?? q?.min_stock ?? q?.stockMin
+                )
               : 0;
 
           return {
@@ -515,14 +643,23 @@ export default function ProductList({ navigation }: Props) {
         })
         .filter((it: ProductVM) => !!it.id) || [];
 
-    const withoutDeleted = mapped.filter(it => !deletedIds.has(String(it.id)));
+    const withoutDeleted = mapped.filter(
+      (it) => !deletedIds.has(String(it.id))
+    );
 
-    if (SKELETON_COUNT > 0 && loading && withoutDeleted.length === 0) {
-      return Array.from({ length: SKELETON_COUNT }).map((_, i) => ({
-        id: `skeleton-${i}`,
-        name: '',
-        __skeleton: true,
-      })) as any[];
+    if (
+      SKELETON_COUNT > 0 &&
+      loading &&
+      withoutDeleted.length === 0
+    ) {
+      return Array.from({ length: SKELETON_COUNT }).map(
+        (_, i) =>
+          ({
+            id: `skeleton-${i}`,
+            name: '',
+            __skeleton: true,
+          } as any)
+      );
     }
 
     const sorted = [...withoutDeleted].sort((a, b) => {
@@ -548,7 +685,7 @@ export default function ProductList({ navigation }: Props) {
     // 🔍 filtro por texto
     const searchTrim = search.trim().toLowerCase();
     const bySearch = searchTrim
-      ? sorted.filter(p =>
+      ? sorted.filter((p) =>
           `${p.name} ${p.brand ?? ''} ${p.sku ?? ''}`
             .toLowerCase()
             .includes(searchTrim)
@@ -556,13 +693,14 @@ export default function ProductList({ navigation }: Props) {
       : sorted;
 
     // 🎯 filtros rápidos
-    const byFilter = bySearch.filter(p => {
+    const byFilter = bySearch.filter((p) => {
       if (filter === 'all') return true;
 
       const info = expiryOf(p.nextExpiry ?? null);
       const qty = Number(p.qty ?? 0);
       const minStockNum =
-        typeof p.minStock === 'number' && Number.isFinite(p.minStock)
+        typeof p.minStock === 'number' &&
+        Number.isFinite(p.minStock)
           ? p.minStock
           : 0;
 
@@ -581,7 +719,14 @@ export default function ProductList({ navigation }: Props) {
     });
 
     return byFilter;
-  }, [rawProducts, loading, deletedIds, search, filter, expiryOf]);
+  }, [
+    rawProducts,
+    loading,
+    deletedIds,
+    search,
+    filter,
+    expiryOf,
+  ]);
 
   // 📊 Resumen de inventario
   const summary = useMemo(() => {
@@ -597,7 +742,8 @@ export default function ProductList({ navigation }: Props) {
       const info = expiryOf(p.nextExpiry ?? null);
       const qty = Number(p.qty ?? 0);
       const minStock =
-        typeof p.minStock === 'number' && Number.isFinite(p.minStock)
+        typeof p.minStock === 'number' &&
+        Number.isFinite(p.minStock)
           ? p.minStock
           : 0;
 
@@ -612,9 +758,11 @@ export default function ProductList({ navigation }: Props) {
     return { total, expSoon, expired, outOfStock, lowStock };
   }, [data, expiryOf]);
 
-  // 🔧 Helper común para armar filas de exportación (CSV/JSON)
+  // 🔧 Helper común para armar filas de exportación (CSV/JSON/Backup)
   const buildExportRows = useCallback(() => {
-    const items = (data || []).filter((it) => !(it as any).__skeleton);
+    const items = (data || []).filter(
+      (it) => !(it as any).__skeleton
+    );
 
     return items.map((p: any) => {
       const e = expiryOf(p.nextExpiry ?? null);
@@ -626,7 +774,8 @@ export default function ProductList({ navigation }: Props) {
         sku: p.sku ?? '',
         qty: Number(p.qty ?? 0),
         minStock:
-          typeof p.minStock === 'number' && Number.isFinite(p.minStock)
+          typeof p.minStock === 'number' &&
+          Number.isFinite(p.minStock)
             ? p.minStock
             : '',
         nextExpiry: p.nextExpiry ?? '',
@@ -636,13 +785,35 @@ export default function ProductList({ navigation }: Props) {
     });
   }, [data, expiryOf]);
 
+  // 🔄 Backup JSON directo usando backupRowsToJSON
+  const handleBackupJSON = useCallback(async () => {
+    try {
+      const rows = buildExportRows();
+      if (!rows.length) {
+        Alert.alert(
+          'Sin datos',
+          'No hay productos para respaldar.'
+        );
+        return;
+      }
+
+      await backupRowsToJSON(rows, 'productos');
+    } catch (e: any) {
+      console.log('[ProductList] backup JSON error', e);
+      Alert.alert('Error', 'No se pudo crear el backup JSON.');
+    }
+  }, [buildExportRows]);
+
   // 📤 CSV: guardar o compartir
   const handleExportCSV = useCallback(
     async (mode: 'save' | 'share') => {
       try {
         const rows = buildExportRows();
         if (!rows.length) {
-          Alert.alert('Sin datos', 'No hay productos para exportar.');
+          Alert.alert(
+            'Sin datos',
+            'No hay productos para exportar.'
+          );
           return;
         }
 
@@ -673,20 +844,25 @@ export default function ProductList({ navigation }: Props) {
         console.log('[ProductList] export CSV error', e);
         Alert.alert(
           'Error',
-          `No se pudo exportar el inventario en CSV.\n\n${e?.message ?? ''}`
+          `No se pudo exportar el inventario en CSV.\n\n${
+            e?.message ?? ''
+          }`
         );
       }
     },
     [buildExportRows]
   );
 
-  // 📤 JSON (backup): guardar o compartir
+  // 📤 JSON (backup): guardar o compartir usando los otros helpers
   const handleExportJSON = useCallback(
     async (mode: 'save' | 'share') => {
       try {
         const rows = buildExportRows();
         if (!rows.length) {
-          Alert.alert('Sin datos', 'No hay productos para exportar.');
+          Alert.alert(
+            'Sin datos',
+            'No hay productos para exportar.'
+          );
           return;
         }
 
@@ -716,7 +892,9 @@ export default function ProductList({ navigation }: Props) {
         console.log('[ProductList] export JSON error', e);
         Alert.alert(
           'Error',
-          `No se pudo exportar el backup (JSON).\n\n${e?.message ?? ''}`
+          `No se pudo exportar el backup (JSON).\n\n${
+            e?.message ?? ''
+          }`
         );
       }
     },
@@ -762,12 +940,14 @@ export default function ProductList({ navigation }: Props) {
     ]);
   }, [handleExportCSV, handleExportJSON]);
 
-  // Header (＋⏱, Exportar, ⚙️)
+  // Header (＋⏱, Exportar, ⚙️, Backup JSON)
   useLayoutEffect(() => {
     navigation.setOptions({
       title: 'InventarioOp',
       headerRight: () => (
-        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+        <View
+          style={{ flexDirection: 'row', alignItems: 'center' }}
+        >
           {/* ＋ ⏱ */}
           <TouchableOpacity
             accessibilityLabel={`Agregar producto (fecha por defecto +${soonDays}d)`}
@@ -786,11 +966,15 @@ export default function ProductList({ navigation }: Props) {
             <Text style={styles.smallBtnText}>⏱ +{soonDays}d</Text>
           </TouchableOpacity>
 
-          {/* 🗄️ Exportar */}
+          {/* 🗄️ Exportar menú */}
           <TouchableOpacity
             accessibilityLabel="Exportar inventario"
             onPress={openExportMenu}
-            style={{ marginLeft: 8, paddingHorizontal: 6, paddingVertical: 4 }}
+            style={{
+              marginLeft: 8,
+              paddingHorizontal: 6,
+              paddingVertical: 4,
+            }}
           >
             <Text style={{ fontSize: 18 }}>🗄️</Text>
           </TouchableOpacity>
@@ -799,14 +983,35 @@ export default function ProductList({ navigation }: Props) {
           <TouchableOpacity
             accessibilityLabel="Ajustes de vencimiento"
             onPress={() => navigation.navigate('ExpirySettings')}
-            style={{ marginLeft: 8, paddingHorizontal: 6, paddingVertical: 4 }}
+            style={{
+              marginLeft: 8,
+              paddingHorizontal: 6,
+              paddingVertical: 4,
+            }}
           >
             <Text style={{ fontSize: 18 }}>⚙️</Text>
+          </TouchableOpacity>
+
+          {/* 🔁 NUEVO BOTÓN BACKUP DIRECTO (usa backupRowsToJSON) */}
+          <TouchableOpacity
+            style={[
+              styles.exportButton,
+              { marginLeft: 8, marginRight: 4 },
+            ]}
+            onPress={handleBackupJSON}
+          >
+            <Text style={styles.exportLabel}>☁️</Text>
           </TouchableOpacity>
         </View>
       ),
     });
-  }, [navigation, soonDays, openExportMenu, setExpiryOffset]);
+  }, [
+    navigation,
+    soonDays,
+    openExportMenu,
+    setExpiryOffset,
+    handleBackupJSON,
+  ]);
 
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -814,58 +1019,84 @@ export default function ProductList({ navigation }: Props) {
     setRefreshing(false);
   }, [fetch]);
 
-  const onDelta = useCallback(async (id: string, delta: number) => {
-    const currentRow = (data || []).find((x) => String(x.id) === String(id));
-    const currentQty = Number(currentRow?.qty ?? 0);
-    const nextQty = Math.max(0, currentQty + delta);
+  const onDelta = useCallback(
+    async (id: string, delta: number) => {
+      const currentRow = (data || []).find(
+        (x) => String(x.id) === String(id)
+      );
+      const currentQty = Number(currentRow?.qty ?? 0);
+      const nextQty = Math.max(0, currentQty + delta);
 
-    const minStock = Number(currentRow?.minStock ?? 0);
+      const minStock = Number(currentRow?.minStock ?? 0);
 
-    const prevStatus = getStockStatus(currentQty, minStock);
-    const nextStatus = getStockStatus(nextQty, minStock);
+      const prevStatus = getStockStatus(currentQty, minStock);
+      const nextStatus = getStockStatus(nextQty, minStock);
 
-    setListState((prev) => {
-      const base = (Array.isArray(prev) && prev.length ? prev : rawProducts) || [];
-      return base.map((row: any) => {
-        const q = row?.props ?? row;
-        if (String(q?.id) !== String(id)) return row;
-        const newProps = { ...q, qty: nextQty };
-        return row?.props ? { ...row, props: newProps } : newProps;
-      });
-    });
-
-    try {
-      const runUpdate = pickUpdateQtyFn(app);
-      if (typeof runUpdate === 'function') {
-        await tryUpdateQtyWithPayloads(runUpdate, id, nextQty, currentRow);
-      } else if (typeof (productRepo as any)?.updateProductQty === 'function') {
-        await (productRepo as any).updateProductQty(id, nextQty);
-      } else if (typeof (productRepo as any)?.adjustStock === 'function') {
-        await (productRepo as any).adjustStock(id, nextQty - currentQty);
-      }
-
-      if (prevStatus !== nextStatus && nextStatus !== 'ok') {
-        const statusType = nextStatus === 'none' ? 'out' : 'low';
-        void notifyStockAlert({
-          name: currentRow?.name ?? 'Producto',
-          status: statusType,
-          qty: nextQty,
-          minStock,
-        });
-      }
-    } catch (e) {
       setListState((prev) => {
-        const base = (Array.isArray(prev) && prev.length ? prev : rawProducts) || [];
+        const base =
+          (Array.isArray(prev) && prev.length ? prev : rawProducts) ||
+          [];
         return base.map((row: any) => {
           const q = row?.props ?? row;
           if (String(q?.id) !== String(id)) return row;
-          const newProps = { ...q, qty: currentQty };
+          const newProps = { ...q, qty: nextQty };
           return row?.props ? { ...row, props: newProps } : newProps;
         });
       });
-      Alert.alert('No se pudo ajustar el stock', 'Se revirtió el cambio local.');
-    }
-  }, [app, data, rawProducts]);
+
+      try {
+        const runUpdate = pickUpdateQtyFn(app);
+        if (typeof runUpdate === 'function') {
+          await tryUpdateQtyWithPayloads(
+            runUpdate,
+            id,
+            nextQty,
+            currentRow
+          );
+        } else if (
+          typeof (productRepo as any)?.updateProductQty ===
+          'function'
+        ) {
+          await (productRepo as any).updateProductQty(id, nextQty);
+        } else if (
+          typeof (productRepo as any)?.adjustStock === 'function'
+        ) {
+          await (productRepo as any).adjustStock(
+            id,
+            nextQty - currentQty
+          );
+        }
+
+        if (prevStatus !== nextStatus && nextStatus !== 'ok') {
+          const statusType = nextStatus === 'none' ? 'out' : 'low';
+          void notifyStockAlert({
+            name: currentRow?.name ?? 'Producto',
+            status: statusType,
+            qty: nextQty,
+            minStock,
+          });
+        }
+      } catch (e) {
+        setListState((prev) => {
+          const base =
+            (Array.isArray(prev) && prev.length
+              ? prev
+              : rawProducts) || [];
+          return base.map((row: any) => {
+            const q = row?.props ?? row;
+            if (String(q?.id) !== String(id)) return row;
+            const newProps = { ...q, qty: currentQty };
+            return row?.props ? { ...row, props: newProps } : newProps;
+          });
+        });
+        Alert.alert(
+          'No se pudo ajustar el stock',
+          'Se revirtió el cambio local.'
+        );
+      }
+    },
+    [app, data, rawProducts]
+  );
 
   // Chips para fecha (editar)
   const setEditExpiryOffset = useCallback((days: number) => {
@@ -876,42 +1107,59 @@ export default function ProductList({ navigation }: Props) {
   }, []);
 
   // Foto: helpers
-  const pickFromLibrary = useCallback(async (setUri: (u: string) => void) => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permiso requerido', 'Se necesita permiso para acceder a la galería.');
-      return;
-    }
-    const res = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      quality: 0.8,
-      allowsEditing: true,
-    });
-    if (!res.canceled && res.assets?.[0]?.uri) {
-      setUri(res.assets[0].uri);
-    }
-  }, []);
+  const pickFromLibrary = useCallback(
+    async (setUri: (u: string) => void) => {
+      const { status } =
+        await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert(
+          'Permiso requerido',
+          'Se necesita permiso para acceder a la galería.'
+        );
+        return;
+      }
+      const res = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        quality: 0.8,
+        allowsEditing: true,
+      });
+      if (!res.canceled && res.assets?.[0]?.uri) {
+        setUri(res.assets[0].uri);
+      }
+    },
+    []
+  );
 
-  const takePhoto = useCallback(async (setUri: (u: string) => void) => {
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permiso requerido', 'Se necesita permiso para usar la cámara.');
-      return;
-    }
-    const res = await ImagePicker.launchCameraAsync({
-      quality: 0.8,
-      allowsEditing: true,
-    });
-    if (!res.canceled && res.assets?.[0]?.uri) {
-      setUri(res.assets[0].uri);
-    }
-  }, []);
+  const takePhoto = useCallback(
+    async (setUri: (u: string) => void) => {
+      const { status } =
+        await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert(
+          'Permiso requerido',
+          'Se necesita permiso para usar la cámara.'
+        );
+        return;
+      }
+      const res = await ImagePicker.launchCameraAsync({
+        quality: 0.8,
+        allowsEditing: true,
+      });
+      if (!res.canceled && res.assets?.[0]?.uri) {
+        setUri(res.assets[0].uri);
+      }
+    },
+    []
+  );
 
   // Guardar producto nuevo
   const onSaveNewProduct = useCallback(async () => {
     const name = (newName || '').trim();
     if (!name) {
-      Alert.alert('Falta el nombre', 'Escribe un nombre para el producto.');
+      Alert.alert(
+        'Falta el nombre',
+        'Escribe un nombre para el producto.'
+      );
       return;
     }
 
@@ -930,7 +1178,9 @@ export default function ProductList({ navigation }: Props) {
     );
     const minStockNum = Math.max(
       0,
-      Number.isFinite(Number(newMinStock)) ? Number(newMinStock) : 0
+      Number.isFinite(Number(newMinStock))
+        ? Number(newMinStock)
+        : 0
     );
 
     const payload = {
@@ -951,13 +1201,20 @@ export default function ProductList({ navigation }: Props) {
 
       if (typeof createFn === 'function') {
         await createFn(payload);
-      } else if (typeof (productRepo as any)?.upsert === 'function') {
+      } else if (
+        typeof (productRepo as any)?.upsert === 'function'
+      ) {
         await (productRepo as any).upsert(payload);
-      } else if (typeof (productRepo as any)?.createProduct === 'function') {
+      } else if (
+        typeof (productRepo as any)?.createProduct === 'function'
+      ) {
         await (productRepo as any).createProduct(payload);
       } else {
         const id = String(Date.now());
-        setListState(prev => ([...(prev || []), { id, ...payload } as any]));
+        setListState((prev) => [
+          ...(prev || []),
+          { id, ...payload } as any,
+        ]);
       }
 
       setShowAdd(false);
@@ -976,7 +1233,10 @@ export default function ProductList({ navigation }: Props) {
       try {
         await refreshExpiryNotifications();
       } catch (err) {
-        console.log('[ProductList] error al refrescar notificaciones (nuevo)', err);
+        console.log(
+          '[ProductList] error al refrescar notificaciones (nuevo)',
+          err
+        );
       }
     } catch (e) {
       console.log('[ProductList] crear error', e);
@@ -984,7 +1244,17 @@ export default function ProductList({ navigation }: Props) {
     } finally {
       setSaving(false);
     }
-  }, [app, newName, newBrand, newSku, newQty, newMinStock, newExpiry, photoUri, fetch]);
+  }, [
+    app,
+    newName,
+    newBrand,
+    newSku,
+    newQty,
+    newMinStock,
+    newExpiry,
+    photoUri,
+    fetch,
+  ]);
 
   // Abrir editor con datos del item
   const openEdit = useCallback((item: ProductVM) => {
@@ -993,12 +1263,11 @@ export default function ProductList({ navigation }: Props) {
     setEditBrand(item.brand || '');
     setEditSku(item.sku || '');
     setEditQty(
-      Number.isFinite(Number(item.qty))
-        ? String(item.qty)
-        : '0'
+      Number.isFinite(Number(item.qty)) ? String(item.qty) : '0'
     );
     setEditMinStock(
-      item.minStock != null && Number.isFinite(Number(item.minStock))
+      item.minStock != null &&
+        Number.isFinite(Number(item.minStock))
         ? String(item.minStock)
         : '0'
     );
@@ -1013,7 +1282,10 @@ export default function ProductList({ navigation }: Props) {
     const name = (editName || '').trim();
     if (!id) return;
     if (!name) {
-      Alert.alert('Falta el nombre', 'Escribe un nombre para el producto.');
+      Alert.alert(
+        'Falta el nombre',
+        'Escribe un nombre para el producto.'
+      );
       return;
     }
 
@@ -1032,10 +1304,14 @@ export default function ProductList({ navigation }: Props) {
     );
     const minStockNum = Math.max(
       0,
-      Number.isFinite(Number(editMinStock)) ? Number(editMinStock) : 0
+      Number.isFinite(Number(editMinStock))
+        ? Number(editMinStock)
+        : 0
     );
 
-    const prevRow = (data || []).find((x) => String(x.id) === String(id));
+    const prevRow = (data || []).find(
+      (x) => String(x.id) === String(id)
+    );
     const prevQty = Number(prevRow?.qty ?? 0);
     const prevMinStock = Number(prevRow?.minStock ?? 0);
     const prevStatus = getStockStatus(prevQty, prevMinStock);
@@ -1060,16 +1336,20 @@ export default function ProductList({ navigation }: Props) {
 
       if (typeof saveFn === 'function') {
         await saveFn(payload);
-      } else if (typeof (productRepo as any)?.upsert === 'function') {
+      } else if (
+        typeof (productRepo as any)?.upsert === 'function'
+      ) {
         await (productRepo as any).upsert(payload);
       } else {
-        setListState(prev => {
+        setListState((prev) => {
           const base = Array.isArray(prev) ? prev : [];
           return base.map((row: any) => {
             const q = row?.props ?? row;
             if (String(q?.id) !== String(id)) return row;
             const newProps = { ...q, ...payload };
-            return row?.props ? { ...row, props: newProps } : newProps;
+            return row?.props
+              ? { ...row, props: newProps }
+              : newProps;
           });
         });
       }
@@ -1092,7 +1372,10 @@ export default function ProductList({ navigation }: Props) {
       try {
         await refreshExpiryNotifications();
       } catch (err) {
-        console.log('[ProductList] error al refrescar notificaciones (editar)', err);
+        console.log(
+          '[ProductList] error al refrescar notificaciones (editar)',
+          err
+        );
       }
     } catch (e) {
       console.log('[ProductList] update error', e);
@@ -1115,62 +1398,88 @@ export default function ProductList({ navigation }: Props) {
   ]);
 
   // Eliminar (persistente con SQLite)
-  const onDelete = useCallback(async (id: string) => {
-    try {
-      setDeleting(true);
-
-      if (typeof (productRepo as any)?.remove === 'function') {
-        await (productRepo as any).remove(id);
-      } else {
-        throw new Error('productRepo.remove no disponible');
-      }
-
-      setDeletedIds(prev => {
-        const s = new Set(prev);
-        s.add(String(id));
-        return s;
-      });
-
-      setListState(prev => {
-        if (!Array.isArray(prev) || prev.length === 0) return prev;
-        return prev.filter((r: any) => String((r?.props ?? r)?.id) !== String(id));
-      });
-
-      setShowEdit(false);
-      await fetch();
-
+  const onDelete = useCallback(
+    async (id: string) => {
       try {
-        await refreshExpiryNotifications();
-      } catch (err) {
-        console.log('[ProductList] error al refrescar notificaciones (eliminar)', err);
+        setDeleting(true);
+
+        if (typeof (productRepo as any)?.remove === 'function') {
+          await (productRepo as any).remove(id);
+        } else {
+          throw new Error('productRepo.remove no disponible');
+        }
+
+        setDeletedIds((prev) => {
+          const s = new Set(prev);
+          s.add(String(id));
+          return s;
+        });
+
+        setListState((prev) => {
+          if (!Array.isArray(prev) || prev.length === 0) return prev;
+          return prev.filter(
+            (r: any) =>
+              String((r?.props ?? r)?.id) !== String(id)
+          );
+        });
+
+        setShowEdit(false);
+        await fetch();
+
+        try {
+          await refreshExpiryNotifications();
+        } catch (err) {
+          console.log(
+            '[ProductList] error al refrescar notificaciones (eliminar)',
+            err
+          );
+        }
+      } catch (e) {
+        console.log('[ProductList] delete error', e);
+        Alert.alert('Error', 'No se pudo eliminar el producto.');
+      } finally {
+        setDeleting(false);
       }
-    } catch (e) {
-      console.log('[ProductList] delete error', e);
-      Alert.alert('Error', 'No se pudo eliminar el producto.');
-    } finally {
-      setDeleting(false);
-    }
-  }, [fetch]);
+    },
+    [fetch]
+  );
 
-  const confirmDelete = useCallback((id: string) => {
-    Alert.alert('Eliminar producto', '¿Seguro que quieres eliminar este producto?', [
-      { text: 'Cancelar', style: 'cancel' },
-      { text: 'Eliminar', style: 'destructive', onPress: () => onDelete(id) },
-    ]);
-  }, [onDelete]);
+  const confirmDelete = useCallback(
+    (id: string) => {
+      Alert.alert(
+        'Eliminar producto',
+        '¿Seguro que quieres eliminar este producto?',
+        [
+          { text: 'Cancelar', style: 'cancel' },
+          {
+            text: 'Eliminar',
+            style: 'destructive',
+            onPress: () => onDelete(id),
+          },
+        ]
+      );
+    },
+    [onDelete]
+  );
 
-  const renderItem = ({ item }: { item: ProductVM & { __skeleton?: boolean } }) => {
+  const renderItem = ({
+    item,
+  }: {
+    item: ProductVM & { __skeleton?: boolean };
+  }) => {
     if (item.__skeleton) return <SkeletonCard />;
 
     const expiry = expiryOf(item.nextExpiry ?? null);
     const qty = Number(item.qty ?? 0);
     const minStock =
-      typeof item.minStock === 'number' && Number.isFinite(item.minStock)
+      typeof item.minStock === 'number' &&
+      Number.isFinite(item.minStock)
         ? item.minStock
         : 0;
 
     const isOutOfStock = qty === 0;
-    const isLowStock = !isOutOfStock && minStock > 0 && qty <= minStock;
+    const isLowStock =
+      !isOutOfStock && minStock > 0 && qty <= minStock;
 
     return (
       <View style={styles.card}>
@@ -1179,12 +1488,21 @@ export default function ProductList({ navigation }: Props) {
           <TouchableOpacity
             onPress={() => openEdit(item)}
             activeOpacity={0.8}
-            style={{ flex: 1, flexDirection: 'row', alignItems: 'center' }}
+            style={{
+              flex: 1,
+              flexDirection: 'row',
+              alignItems: 'center',
+            }}
           >
             {item.photoUrl ? (
-              <Image source={{ uri: item.photoUrl }} style={styles.thumb} />
+              <Image
+                source={{ uri: item.photoUrl }}
+                style={styles.thumb}
+              />
             ) : (
-              <View style={[styles.thumb, styles.thumbEmpty]} />
+              <View
+                style={[styles.thumb, styles.thumbEmpty]}
+              />
             )}
 
             <View style={{ width: 12 }} />
@@ -1192,7 +1510,13 @@ export default function ProductList({ navigation }: Props) {
             <View style={styles.mainCol}>
               <Text style={styles.name}>{item.name}</Text>
               <Text style={styles.meta}>
-                {[item.brand, item.category, item.sku].filter(Boolean).join(' · ') || '—'}
+                {[
+                  item.brand,
+                  item.category,
+                  item.sku,
+                ]
+                  .filter(Boolean)
+                  .join(' · ') || '—'}
               </Text>
 
               <View style={styles.pillRow}>
@@ -1202,22 +1526,39 @@ export default function ProductList({ navigation }: Props) {
                     {
                       backgroundColor: expiry.color,
                       borderColor: expiry.color,
-                      opacity: expiry.status === 'none' ? 0.4 : 1,
+                      opacity:
+                        expiry.status === 'none' ? 0.4 : 1,
                     },
                   ]}
                 >
-                  <Text style={styles.expiryPillText}>{expiry.label}</Text>
+                  <Text style={styles.expiryPillText}>
+                    {expiry.label}
+                  </Text>
                 </View>
 
                 {isOutOfStock && (
-                  <View style={[styles.expiryPill, styles.lowStockPill]}>
-                    <Text style={styles.expiryPillText}>SIN STOCK</Text>
+                  <View
+                    style={[
+                      styles.expiryPill,
+                      styles.lowStockPill,
+                    ]}
+                  >
+                    <Text style={styles.expiryPillText}>
+                      SIN STOCK
+                    </Text>
                   </View>
                 )}
 
                 {isLowStock && (
-                  <View style={[styles.expiryPill, styles.lowStockPill]}>
-                    <Text style={styles.expiryPillText}>BAJO STOCK</Text>
+                  <View
+                    style={[
+                      styles.expiryPill,
+                      styles.lowStockPill,
+                    ]}
+                  >
+                    <Text style={styles.expiryPillText}>
+                      BAJO STOCK
+                    </Text>
                   </View>
                 )}
               </View>
@@ -1226,21 +1567,30 @@ export default function ProductList({ navigation }: Props) {
 
           {/* 👇 Controles de cantidad y menú */}
           <View style={styles.qtyControls}>
-            <TouchableOpacity style={styles.qtyBtn} onPress={() => onDelta(item.id, -1)} hitSlop={8}>
+            <TouchableOpacity
+              style={styles.qtyBtn}
+              onPress={() => onDelta(item.id, -1)}
+              hitSlop={8}
+            >
               <Text style={styles.qtyBtnText}>−</Text>
             </TouchableOpacity>
 
             <Text
               style={[
                 styles.qty,
-                (isOutOfStock || isLowStock) && styles.qtyLow,
+                (isOutOfStock || isLowStock) &&
+                  styles.qtyLow,
                 { marginHorizontal: 8 },
               ]}
             >
               {qty}
             </Text>
 
-            <TouchableOpacity style={styles.qtyBtn} onPress={() => onDelta(item.id, +1)} hitSlop={8}>
+            <TouchableOpacity
+              style={styles.qtyBtn}
+              onPress={() => onDelta(item.id, +1)}
+              hitSlop={8}
+            >
               <Text style={styles.qtyBtnText}>＋</Text>
             </TouchableOpacity>
 
@@ -1261,10 +1611,15 @@ export default function ProductList({ navigation }: Props) {
   const EmptyState = () => (
     <View style={styles.emptyWrap}>
       <Text style={styles.emptyTitle}>No hay productos</Text>
-      <Text style={styles.emptySubtitle}>Agrega el primero para comenzar.</Text>
+      <Text style={styles.emptySubtitle}>
+        Agrega el primero para comenzar.
+      </Text>
       <TouchableOpacity
         style={[styles.addButton, styles.primary]}
-        onPress={() => { setExpiryOffset(soonDays); setShowAdd(true); }}
+        onPress={() => {
+          setExpiryOffset(soonDays);
+          setShowAdd(true);
+        }}
       >
         <Text style={styles.addButtonText}>Agregar producto</Text>
       </TouchableOpacity>
@@ -1287,8 +1642,12 @@ export default function ProductList({ navigation }: Props) {
         </View>
 
         {!!search && (
-          <TouchableOpacity onPress={() => setSearch('')}>
-            <Text style={styles.clearSearchText}>Limpiar</Text>
+          <TouchableOpacity
+            onPress={() => setSearch('')}
+          >
+            <Text style={styles.clearSearchText}>
+              Limpiar
+            </Text>
           </TouchableOpacity>
         )}
       </View>
@@ -1296,13 +1655,17 @@ export default function ProductList({ navigation }: Props) {
       {/* 🎯 Filtros rápidos */}
       <View style={styles.filterChipsRow}>
         <TouchableOpacity
-          style={[styles.filterChip, filter === 'all' && styles.filterChipActive]}
+          style={[
+            styles.filterChip,
+            filter === 'all' && styles.filterChipActive,
+          ]}
           onPress={() => setFilter('all')}
         >
           <Text
             style={[
               styles.filterChipText,
-              filter === 'all' && styles.filterChipTextActive,
+              filter === 'all' &&
+                styles.filterChipTextActive,
             ]}
           >
             Todos
@@ -1312,14 +1675,16 @@ export default function ProductList({ navigation }: Props) {
         <TouchableOpacity
           style={[
             styles.filterChip,
-            filter === 'aboutToExpire' && styles.filterChipActive,
+            filter === 'aboutToExpire' &&
+              styles.filterChipActive,
           ]}
           onPress={() => setFilter('aboutToExpire')}
         >
           <Text
             style={[
               styles.filterChipText,
-              filter === 'aboutToExpire' && styles.filterChipTextActive,
+              filter === 'aboutToExpire' &&
+                styles.filterChipTextActive,
             ]}
           >
             Por vencer
@@ -1329,14 +1694,16 @@ export default function ProductList({ navigation }: Props) {
         <TouchableOpacity
           style={[
             styles.filterChip,
-            filter === 'expired' && styles.filterChipActive,
+            filter === 'expired' &&
+              styles.filterChipActive,
           ]}
           onPress={() => setFilter('expired')}
         >
           <Text
             style={[
               styles.filterChipText,
-              filter === 'expired' && styles.filterChipTextActive,
+              filter === 'expired' &&
+                styles.filterChipTextActive,
             ]}
           >
             Vencidos
@@ -1346,14 +1713,16 @@ export default function ProductList({ navigation }: Props) {
         <TouchableOpacity
           style={[
             styles.filterChip,
-            filter === 'outOfStock' && styles.filterChipActive,
+            filter === 'outOfStock' &&
+              styles.filterChipActive,
           ]}
           onPress={() => setFilter('outOfStock')}
         >
           <Text
             style={[
               styles.filterChipText,
-              filter === 'outOfStock' && styles.filterChipTextActive,
+              filter === 'outOfStock' &&
+                styles.filterChipTextActive,
             ]}
           >
             Sin stock
@@ -1363,14 +1732,16 @@ export default function ProductList({ navigation }: Props) {
         <TouchableOpacity
           style={[
             styles.filterChip,
-            filter === 'lowStock' && styles.filterChipActive,
+            filter === 'lowStock' &&
+              styles.filterChipActive,
           ]}
           onPress={() => setFilter('lowStock')}
         >
           <Text
             style={[
               styles.filterChipText,
-              filter === 'lowStock' && styles.filterChipTextActive,
+              filter === 'lowStock' &&
+                styles.filterChipTextActive,
             ]}
           >
             Bajo stock
@@ -1384,46 +1755,81 @@ export default function ProductList({ navigation }: Props) {
           style={styles.summaryItem}
           onPress={() => setFilter('all')}
         >
-          <Text style={styles.summaryNumber}>{summary.total}</Text>
-          <Text style={styles.summaryLabel}>Productos</Text>
+          <Text style={styles.summaryNumber}>
+            {summary.total}
+          </Text>
+          <Text style={styles.summaryLabel}>
+            Productos
+          </Text>
         </TouchableOpacity>
 
         <TouchableOpacity
           style={styles.summaryItem}
           onPress={() => setFilter('expired')}
         >
-          <Text style={[styles.summaryNumber, { color: '#ef4444' }]}>
+          <Text
+            style={[
+              styles.summaryNumber,
+              { color: '#ef4444' },
+            ]}
+          >
             {summary.expired}
           </Text>
-          <Text style={styles.summaryLabel}>Vencidos</Text>
+          <Text style={styles.summaryLabel}>
+            Vencidos
+          </Text>
         </TouchableOpacity>
 
         <TouchableOpacity
           style={styles.summaryItem}
           onPress={() => setFilter('aboutToExpire')}
         >
-          <Text style={[styles.summaryNumber, { color: '#fb923c' }]}>
+          <Text
+            style={[
+              styles.summaryNumber,
+              { color: '#fb923c' },
+            ]}
+          >
             {summary.expSoon}
           </Text>
-          <Text style={styles.summaryLabel}>Por vencer</Text>
+          <Text style={styles.summaryLabel}>
+            Por vencer
+          </Text>
         </TouchableOpacity>
 
         <TouchableOpacity
           style={styles.summaryItem}
           onPress={() => setFilter('lowStock')}
           onLongPress={() =>
-            Alert.alert('Ver alertas de stock', '¿Qué deseas ver?', [
-              { text: 'Bajo stock', onPress: () => setFilter('lowStock') },
-              { text: 'Sin stock', onPress: () => setFilter('outOfStock') },
-              { text: 'Cancelar', style: 'cancel' },
-            ])
+            Alert.alert(
+              'Ver alertas de stock',
+              '¿Qué deseas ver?',
+              [
+                {
+                  text: 'Bajo stock',
+                  onPress: () => setFilter('lowStock'),
+                },
+                {
+                  text: 'Sin stock',
+                  onPress: () => setFilter('outOfStock'),
+                },
+                { text: 'Cancelar', style: 'cancel' },
+              ]
+            )
           }
           delayLongPress={250}
         >
-          <Text style={[styles.summaryNumber, { color: '#fbbf24' }]}>
+          <Text
+            style={[
+              styles.summaryNumber,
+              { color: '#fbbf24' },
+            ]}
+          >
             {summary.outOfStock + summary.lowStock}
           </Text>
-          <Text style={styles.summaryLabel}>Con alerta de stock</Text>
+          <Text style={styles.summaryLabel}>
+            Con alerta de stock
+          </Text>
         </TouchableOpacity>
       </View>
 
@@ -1433,12 +1839,21 @@ export default function ProductList({ navigation }: Props) {
         keyExtractor={(it) => String(it.id)}
         renderItem={renderItem}
         refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+          />
         }
-        ListEmptyComponent={!loading ? <EmptyState /> : null}
+        ListEmptyComponent={
+          !loading ? <EmptyState /> : null
+        }
         contentContainerStyle={
           data.length === 0
-            ? { flex: 1, justifyContent: 'center', alignItems: 'center' }
+            ? {
+                flex: 1,
+                justifyContent: 'center',
+                alignItems: 'center',
+              }
             : undefined
         }
       />
@@ -1452,7 +1867,9 @@ export default function ProductList({ navigation }: Props) {
       >
         <View style={styles.modal}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Nuevo producto</Text>
+            <Text style={styles.modalTitle}>
+              Nuevo producto
+            </Text>
 
             <ScrollView
               keyboardShouldPersistTaps="handled"
@@ -1462,25 +1879,53 @@ export default function ProductList({ navigation }: Props) {
               <View style={styles.photoRow}>
                 <View style={styles.photoPreviewWrap}>
                   {photoUri ? (
-                    <Image source={{ uri: photoUri }} style={styles.photoPreview} />
+                    <Image
+                      source={{ uri: photoUri }}
+                      style={styles.photoPreview}
+                    />
                   ) : (
-                    <View style={[styles.photoPreview, styles.thumbEmpty]} />
+                    <View
+                      style={[
+                        styles.photoPreview,
+                        styles.thumbEmpty,
+                      ]}
+                    />
                   )}
                 </View>
                 <View style={{ flex: 1 }}>
-                  <View style={{ flexDirection: 'row' }}>
+                  <View
+                    style={{ flexDirection: 'row' }}
+                  >
                     <TouchableOpacity
-                      style={[styles.smallChip, styles.secondary]}
-                      onPress={() => pickFromLibrary(setPhotoUri)}
+                      style={[
+                        styles.smallChip,
+                        styles.secondary,
+                      ]}
+                      onPress={() =>
+                        pickFromLibrary(setPhotoUri)
+                      }
                     >
-                      <Text style={styles.smallChipText}>Galería</Text>
+                      <Text
+                        style={styles.smallChipText}
+                      >
+                        Galería
+                      </Text>
                     </TouchableOpacity>
                     <View style={{ width: 8 }} />
                     <TouchableOpacity
-                      style={[styles.smallChip, styles.secondary]}
-                      onPress={() => takePhoto(setPhotoUri)}
+                      style={[
+                        styles.smallChip,
+                        styles.secondary,
+                      ]}
+                      onPress={() =>
+                        takePhoto(setPhotoUri)
+                      }
                     >
-                      <Text style={styles.smallChipText}>Cámara</Text>
+                      <Text
+                        style={styles.smallChipText}
+                      >
+                        Cámara
+                      </Text>
                     </TouchableOpacity>
                   </View>
                 </View>
@@ -1488,7 +1933,9 @@ export default function ProductList({ navigation }: Props) {
 
               {/* Campos - NUEVO PRODUCTO */}
               <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Nombre</Text>
+                <Text style={styles.fieldLabel}>
+                  Nombre
+                </Text>
                 <TextInput
                   placeholder="Ej: Cerveza IPA"
                   value={newName}
@@ -1500,7 +1947,9 @@ export default function ProductList({ navigation }: Props) {
               </View>
 
               <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Marca</Text>
+                <Text style={styles.fieldLabel}>
+                  Marca
+                </Text>
                 <TextInput
                   placeholder="Ej: Kunstmann"
                   value={newBrand}
@@ -1511,8 +1960,13 @@ export default function ProductList({ navigation }: Props) {
               </View>
 
               <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>SKU (opcional)</Text>
-                <Text style={styles.fieldHint}>Código, código de barras o identificador interno</Text>
+                <Text style={styles.fieldLabel}>
+                  SKU (opcional)
+                </Text>
+                <Text style={styles.fieldHint}>
+                  Código, código de barras o
+                  identificador interno
+                </Text>
                 <TextInput
                   placeholder="Ej: SKU-00123"
                   value={newSku}
@@ -1524,8 +1978,12 @@ export default function ProductList({ navigation }: Props) {
               </View>
 
               <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Stock inicial</Text>
-                <Text style={styles.fieldHint}>Unidades que tienes ahora mismo</Text>
+                <Text style={styles.fieldLabel}>
+                  Stock inicial
+                </Text>
+                <Text style={styles.fieldHint}>
+                  Unidades que tienes ahora mismo
+                </Text>
                 <TextInput
                   placeholder="Ej: 12"
                   value={newQty}
@@ -1537,8 +1995,13 @@ export default function ProductList({ navigation }: Props) {
               </View>
 
               <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Stock mínimo (bajo stock)</Text>
-                <Text style={styles.fieldHint}>Solo para mostrar la etiqueta BAJO STOCK en la lista</Text>
+                <Text style={styles.fieldLabel}>
+                  Stock mínimo (bajo stock)
+                </Text>
+                <Text style={styles.fieldHint}>
+                  Solo para mostrar la etiqueta
+                  BAJO STOCK en la lista
+                </Text>
                 <TextInput
                   placeholder="Ej: 3 (opcional)"
                   value={newMinStock}
@@ -1550,8 +2013,12 @@ export default function ProductList({ navigation }: Props) {
               </View>
 
               <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Fecha de vencimiento</Text>
-                <Text style={styles.fieldHint}>Formato AAAA-MM-DD</Text>
+                <Text style={styles.fieldLabel}>
+                  Fecha de vencimiento
+                </Text>
+                <Text style={styles.fieldHint}>
+                  Formato AAAA-MM-DD
+                </Text>
                 <TextInput
                   placeholder="Ej: 2024-12-31"
                   value={newExpiry}
@@ -1561,40 +2028,97 @@ export default function ProductList({ navigation }: Props) {
                 />
               </View>
 
-              <View style={{ flexDirection: 'row', marginBottom: 8 }}>
-                <TouchableOpacity style={[styles.smallChip, styles.secondary]} onPress={() => setExpiryOffset(0)}>
-                  <Text style={styles.smallChipText}>Hoy</Text>
+              <View
+                style={{
+                  flexDirection: 'row',
+                  marginBottom: 8,
+                }}
+              >
+                <TouchableOpacity
+                  style={[
+                    styles.smallChip,
+                    styles.secondary,
+                  ]}
+                  onPress={() => setExpiryOffset(0)}
+                >
+                  <Text style={styles.smallChipText}>
+                    Hoy
+                  </Text>
                 </TouchableOpacity>
                 <View style={{ width: 8 }} />
-                <TouchableOpacity style={[styles.smallChip, styles.secondary]} onPress={() => setExpiryOffset(7)}>
-                  <Text style={styles.smallChipText}>+7d</Text>
+                <TouchableOpacity
+                  style={[
+                    styles.smallChip,
+                    styles.secondary,
+                  ]}
+                  onPress={() => setExpiryOffset(7)}
+                >
+                  <Text style={styles.smallChipText}>
+                    +7d
+                  </Text>
                 </TouchableOpacity>
                 <View style={{ width: 8 }} />
-                <TouchableOpacity style={[styles.smallChip, styles.secondary]} onPress={() => setExpiryOffset(30)}>
-                  <Text style={styles.smallChipText}>+30d</Text>
+                <TouchableOpacity
+                  style={[
+                    styles.smallChip,
+                    styles.secondary,
+                  ]}
+                  onPress={() =>
+                    setExpiryOffset(30)
+                  }
+                >
+                  <Text style={styles.smallChipText}>
+                    +30d
+                  </Text>
                 </TouchableOpacity>
                 <View style={{ width: 8 }} />
-                <TouchableOpacity style={[styles.smallChip, styles.secondary]} onPress={() => setNewExpiry('')}>
-                  <Text style={styles.smallChipText}>Limpiar</Text>
+                <TouchableOpacity
+                  style={[
+                    styles.smallChip,
+                    styles.secondary,
+                  ]}
+                  onPress={() =>
+                    setNewExpiry('')
+                  }
+                >
+                  <Text style={styles.smallChipText}>
+                    Limpiar
+                  </Text>
                 </TouchableOpacity>
               </View>
             </ScrollView>
 
             {/* Acciones NUEVO producto */}
-            <View style={[styles.modalActions, { justifyContent: 'flex-end' }]}>
+            <View
+              style={[
+                styles.modalActions,
+                { justifyContent: 'flex-end' },
+              ]}
+            >
               <TouchableOpacity
                 onPress={() => setShowAdd(false)}
-                style={[styles.addButton, styles.secondary, { marginRight: 8 }]}
+                style={[
+                  styles.addButton,
+                  styles.secondary,
+                  { marginRight: 8 },
+                ]}
                 disabled={saving}
               >
-                <Text style={styles.addButtonText}>Cancelar</Text>
+                <Text style={styles.addButtonText}>
+                  Cancelar
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 onPress={onSaveNewProduct}
-                style={[styles.addButton, styles.primary]}
+                style={[
+                  styles.addButton,
+                  styles.primary,
+                ]}
                 disabled={saving}
               >
-                <Text style={styles.addButtonText}>{saving ? 'Guardando…' : 'Guardar'}</Text>
+                <Text style={styles.addButtonText}>
+                  {saving ? 'Guardando…' : 'Guardar'}
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -1610,7 +2134,9 @@ export default function ProductList({ navigation }: Props) {
       >
         <View style={styles.modal}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Editar producto</Text>
+            <Text style={styles.modalTitle}>
+              Editar producto
+            </Text>
 
             <ScrollView
               keyboardShouldPersistTaps="handled"
@@ -1620,25 +2146,53 @@ export default function ProductList({ navigation }: Props) {
               <View style={styles.photoRow}>
                 <View style={styles.photoPreviewWrap}>
                   {editPhotoUri ? (
-                    <Image source={{ uri: editPhotoUri }} style={styles.photoPreview} />
+                    <Image
+                      source={{ uri: editPhotoUri }}
+                      style={styles.photoPreview}
+                    />
                   ) : (
-                    <View style={[styles.photoPreview, styles.thumbEmpty]} />
+                    <View
+                      style={[
+                        styles.photoPreview,
+                        styles.thumbEmpty,
+                      ]}
+                    />
                   )}
                 </View>
                 <View style={{ flex: 1 }}>
-                  <View style={{ flexDirection: 'row' }}>
+                  <View
+                    style={{ flexDirection: 'row' }}
+                  >
                     <TouchableOpacity
-                      style={[styles.smallChip, styles.secondary]}
-                      onPress={() => pickFromLibrary(setEditPhotoUri)}
+                      style={[
+                        styles.smallChip,
+                        styles.secondary,
+                      ]}
+                      onPress={() =>
+                        pickFromLibrary(setEditPhotoUri)
+                      }
                     >
-                      <Text style={styles.smallChipText}>Galería</Text>
+                      <Text
+                        style={styles.smallChipText}
+                      >
+                        Galería
+                      </Text>
                     </TouchableOpacity>
                     <View style={{ width: 8 }} />
                     <TouchableOpacity
-                      style={[styles.smallChip, styles.secondary]}
-                      onPress={() => takePhoto(setEditPhotoUri)}
+                      style={[
+                        styles.smallChip,
+                        styles.secondary,
+                      ]}
+                      onPress={() =>
+                        takePhoto(setEditPhotoUri)
+                      }
                     >
-                      <Text style={styles.smallChipText}>Cámara</Text>
+                      <Text
+                        style={styles.smallChipText}
+                      >
+                        Cámara
+                      </Text>
                     </TouchableOpacity>
                   </View>
                 </View>
@@ -1646,7 +2200,9 @@ export default function ProductList({ navigation }: Props) {
 
               {/* Campos - EDITAR PRODUCTO */}
               <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Nombre</Text>
+                <Text style={styles.fieldLabel}>
+                  Nombre
+                </Text>
                 <TextInput
                   placeholder="Ej: Cerveza IPA"
                   value={editName}
@@ -1657,7 +2213,9 @@ export default function ProductList({ navigation }: Props) {
               </View>
 
               <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Marca</Text>
+                <Text style={styles.fieldLabel}>
+                  Marca
+                </Text>
                 <TextInput
                   placeholder="Ej: Kunstmann"
                   value={editBrand}
@@ -1668,8 +2226,13 @@ export default function ProductList({ navigation }: Props) {
               </View>
 
               <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>SKU (opcional)</Text>
-                <Text style={styles.fieldHint}>Código, código de barras o identificador interno</Text>
+                <Text style={styles.fieldLabel}>
+                  SKU (opcional)
+                </Text>
+                <Text style={styles.fieldHint}>
+                  Código, código de barras o
+                  identificador interno
+                </Text>
                 <TextInput
                   placeholder="Ej: SKU-00123"
                   value={editSku}
@@ -1681,8 +2244,12 @@ export default function ProductList({ navigation }: Props) {
               </View>
 
               <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Stock actual</Text>
-                <Text style={styles.fieldHint}>Unidades que tienes ahora mismo</Text>
+                <Text style={styles.fieldLabel}>
+                  Stock actual
+                </Text>
+                <Text style={styles.fieldHint}>
+                  Unidades que tienes ahora mismo
+                </Text>
                 <TextInput
                   placeholder="Ej: 12"
                   value={editQty}
@@ -1694,8 +2261,13 @@ export default function ProductList({ navigation }: Props) {
               </View>
 
               <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Stock mínimo (bajo stock)</Text>
-                <Text style={styles.fieldHint}>Solo para mostrar la etiqueta BAJO STOCK en la lista</Text>
+                <Text style={styles.fieldLabel}>
+                  Stock mínimo (bajo stock)
+                </Text>
+                <Text style={styles.fieldHint}>
+                  Solo para mostrar la etiqueta
+                  BAJO STOCK en la lista
+                </Text>
                 <TextInput
                   placeholder="Ej: 3 (opcional)"
                   value={editMinStock}
@@ -1707,8 +2279,12 @@ export default function ProductList({ navigation }: Props) {
               </View>
 
               <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Fecha de vencimiento</Text>
-                <Text style={styles.fieldHint}>Formato AAAA-MM-DD</Text>
+                <Text style={styles.fieldLabel}>
+                  Fecha de vencimiento
+                </Text>
+                <Text style={styles.fieldHint}>
+                  Formato AAAA-MM-DD
+                </Text>
                 <TextInput
                   placeholder="Ej: 2024-12-31"
                   value={editExpiry}
@@ -1718,52 +2294,126 @@ export default function ProductList({ navigation }: Props) {
                 />
               </View>
 
-              <View style={{ flexDirection: 'row', marginBottom: 8 }}>
-                <TouchableOpacity style={[styles.smallChip, styles.secondary]} onPress={() => setEditExpiryOffset(0)}>
-                  <Text style={styles.smallChipText}>Hoy</Text>
+              <View
+                style={{
+                  flexDirection: 'row',
+                  marginBottom: 8,
+                }}
+              >
+                <TouchableOpacity
+                  style={[
+                    styles.smallChip,
+                    styles.secondary,
+                  ]}
+                  onPress={() =>
+                    setEditExpiryOffset(0)
+                  }
+                >
+                  <Text style={styles.smallChipText}>
+                    Hoy
+                  </Text>
                 </TouchableOpacity>
                 <View style={{ width: 8 }} />
-                <TouchableOpacity style={[styles.smallChip, styles.secondary]} onPress={() => setEditExpiryOffset(7)}>
-                  <Text style={styles.smallChipText}>+7d</Text>
+                <TouchableOpacity
+                  style={[
+                    styles.smallChip,
+                    styles.secondary,
+                  ]}
+                  onPress={() =>
+                    setEditExpiryOffset(7)
+                  }
+                >
+                  <Text style={styles.smallChipText}>
+                    +7d
+                  </Text>
                 </TouchableOpacity>
                 <View style={{ width: 8 }} />
-                <TouchableOpacity style={[styles.smallChip, styles.secondary]} onPress={() => setEditExpiryOffset(30)}>
-                  <Text style={styles.smallChipText}>+30d</Text>
+                <TouchableOpacity
+                  style={[
+                    styles.smallChip,
+                    styles.secondary,
+                  ]}
+                  onPress={() =>
+                    setEditExpiryOffset(30)
+                  }
+                >
+                  <Text style={styles.smallChipText}>
+                    +30d
+                  </Text>
                 </TouchableOpacity>
                 <View style={{ width: 8 }} />
-                <TouchableOpacity style={[styles.smallChip, styles.secondary]} onPress={() => setEditExpiry('')}>
-                  <Text style={styles.smallChipText}>Limpiar</Text>
+                <TouchableOpacity
+                  style={[
+                    styles.smallChip,
+                    styles.secondary,
+                  ]}
+                  onPress={() =>
+                    setEditExpiry('')
+                  }
+                >
+                  <Text style={styles.smallChipText}>
+                    Limpiar
+                  </Text>
                 </TouchableOpacity>
               </View>
             </ScrollView>
 
             {/* Acciones edición */}
-            <View style={[styles.modalActions, { justifyContent: 'space-between' }]}>
+            <View
+              style={[
+                styles.modalActions,
+                { justifyContent: 'space-between' },
+              ]}
+            >
               <TouchableOpacity
-                onPress={() => editId && confirmDelete(editId)}
+                onPress={() =>
+                  editId && confirmDelete(editId)
+                }
                 style={[
                   styles.addButton,
-                  { borderColor: 'rgba(255,100,100,0.5)', backgroundColor: 'rgba(255,80,80,0.18)' },
+                  {
+                    borderColor:
+                      'rgba(255,100,100,0.5)',
+                    backgroundColor:
+                      'rgba(255,80,80,0.18)',
+                  },
                 ]}
                 disabled={deleting}
               >
-                <Text style={styles.addButtonText}>Eliminar</Text>
+                <Text style={styles.addButtonText}>
+                  Eliminar
+                </Text>
               </TouchableOpacity>
 
-              <View style={{ flexDirection: 'row' }}>
+              <View
+                style={{ flexDirection: 'row' }}
+              >
                 <TouchableOpacity
                   onPress={() => setShowEdit(false)}
-                  style={[styles.addButton, styles.secondary, { marginRight: 8 }]}
+                  style={[
+                    styles.addButton,
+                    styles.secondary,
+                    { marginRight: 8 },
+                  ]}
                   disabled={updating}
                 >
-                  <Text style={styles.addButtonText}>Cancelar</Text>
+                  <Text style={styles.addButtonText}>
+                    Cancelar
+                  </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   onPress={onSaveEdit}
-                  style={[styles.addButton, styles.primary]}
+                  style={[
+                    styles.addButton,
+                    styles.primary,
+                  ]}
                   disabled={updating}
                 >
-                  <Text style={styles.addButtonText}>{updating ? 'Guardando…' : 'Guardar'}</Text>
+                  <Text style={styles.addButtonText}>
+                    {updating
+                      ? 'Guardando…'
+                      : 'Guardar'}
+                  </Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -1774,7 +2424,10 @@ export default function ProductList({ navigation }: Props) {
       {/* FAB */}
       <TouchableOpacity
         style={styles.fab}
-        onPress={() => { setExpiryOffset(soonDays); setShowAdd(true); }}
+        onPress={() => {
+          setExpiryOffset(soonDays);
+          setShowAdd(true);
+        }}
         accessibilityLabel="Nuevo producto"
       >
         <Text style={styles.fabIcon}>＋</Text>
@@ -1787,11 +2440,18 @@ function SkeletonCard() {
   return (
     <View style={styles.card}>
       <View style={styles.row}>
-        <View style={[styles.thumb, styles.thumbEmpty]} />
+        <View
+          style={[styles.thumb, styles.thumbEmpty]}
+        />
         <View style={{ width: 12 }} />
         <View style={{ flex: 1 }}>
           <View style={styles.skelLine} />
-          <View style={[styles.skelLine, { width: '50%' }]} />
+          <View
+            style={[
+              styles.skelLine,
+              { width: '50%' },
+            ]}
+          />
         </View>
         <View style={{ width: 12 }} />
         <View style={styles.skelDot} />
@@ -2172,6 +2832,17 @@ const styles = StyleSheet.create({
     fontSize: 11,
     opacity: 0.85,
   },
-});
 
-export {};
+  // Botón backup en header
+  exportButton: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 999,
+    backgroundColor: '#111827',
+  },
+  exportLabel: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+});
