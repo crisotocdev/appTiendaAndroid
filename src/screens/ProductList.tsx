@@ -1019,84 +1019,77 @@ export default function ProductList({ navigation }: Props) {
     setRefreshing(false);
   }, [fetch]);
 
-  const onDelta = useCallback(
-    async (id: string, delta: number) => {
-      const currentRow = (data || []).find(
-        (x) => String(x.id) === String(id)
-      );
-      const currentQty = Number(currentRow?.qty ?? 0);
-      const nextQty = Math.max(0, currentQty + delta);
+  const onDelta = useCallback(async (id: string, delta: number) => {
+    const currentRow = (data || []).find((x) => String(x.id) === String(id));
+    const currentQty = Number(currentRow?.qty ?? 0);
+    const nextQty = Math.max(0, currentQty + delta);
 
-      const minStock = Number(currentRow?.minStock ?? 0);
+    const minStock = Number(currentRow?.minStock ?? 0);
 
-      const prevStatus = getStockStatus(currentQty, minStock);
-      const nextStatus = getStockStatus(nextQty, minStock);
+    const prevStatus = getStockStatus(currentQty, minStock);
+    const nextStatus = getStockStatus(nextQty, minStock);
 
+    // 👇 Actualizamos UI optimistamente
+    setListState((prev) => {
+      const base = (Array.isArray(prev) && prev.length ? prev : rawProducts) || [];
+      return base.map((row: any) => {
+        const q = row?.props ?? row;
+        if (String(q?.id) !== String(id)) return row;
+        const newProps = { ...q, qty: nextQty };
+        return row?.props ? { ...row, props: newProps } : newProps;
+      });
+    });
+
+    try {
+      const runUpdate = pickUpdateQtyFn(app);
+      const hasRepoUpdate =
+        typeof (productRepo as any)?.updateProductQty === 'function' ||
+        typeof (productRepo as any)?.adjustStock === 'function';
+
+      // ❗ Si no hay NINGÚN método para persistir, avisamos y revertimos
+      if (!runUpdate && !hasRepoUpdate) {
+        throw new Error('No hay repositorio configurado para actualizar el stock.');
+      }
+
+      if (typeof runUpdate === 'function') {
+        await tryUpdateQtyWithPayloads(runUpdate, id, nextQty, currentRow);
+      } else if (typeof (productRepo as any)?.updateProductQty === 'function') {
+        await (productRepo as any).updateProductQty(id, nextQty);
+      } else if (typeof (productRepo as any)?.adjustStock === 'function') {
+        await (productRepo as any).adjustStock(id, nextQty - currentQty);
+      }
+
+      // Notificación de alerta de stock si cambia el estado
+      if (prevStatus !== nextStatus && nextStatus !== 'ok') {
+        const statusType = nextStatus === 'none' ? 'out' : 'low';
+        void notifyStockAlert({
+          name: currentRow?.name ?? 'Producto',
+          status: statusType,
+          qty: nextQty,
+          minStock,
+        });
+      }
+    } catch (e: any) {
+      // 👇 Revertimos el cambio local si algo falla
       setListState((prev) => {
-        const base =
-          (Array.isArray(prev) && prev.length ? prev : rawProducts) ||
-          [];
+        const base = (Array.isArray(prev) && prev.length ? prev : rawProducts) || [];
         return base.map((row: any) => {
           const q = row?.props ?? row;
           if (String(q?.id) !== String(id)) return row;
-          const newProps = { ...q, qty: nextQty };
+          const newProps = { ...q, qty: currentQty };
           return row?.props ? { ...row, props: newProps } : newProps;
         });
       });
 
-      try {
-        const runUpdate = pickUpdateQtyFn(app);
-        if (typeof runUpdate === 'function') {
-          await tryUpdateQtyWithPayloads(
-            runUpdate,
-            id,
-            nextQty,
-            currentRow
-          );
-        } else if (
-          typeof (productRepo as any)?.updateProductQty ===
-          'function'
-        ) {
-          await (productRepo as any).updateProductQty(id, nextQty);
-        } else if (
-          typeof (productRepo as any)?.adjustStock === 'function'
-        ) {
-          await (productRepo as any).adjustStock(
-            id,
-            nextQty - currentQty
-          );
-        }
-
-        if (prevStatus !== nextStatus && nextStatus !== 'ok') {
-          const statusType = nextStatus === 'none' ? 'out' : 'low';
-          void notifyStockAlert({
-            name: currentRow?.name ?? 'Producto',
-            status: statusType,
-            qty: nextQty,
-            minStock,
-          });
-        }
-      } catch (e) {
-        setListState((prev) => {
-          const base =
-            (Array.isArray(prev) && prev.length
-              ? prev
-              : rawProducts) || [];
-          return base.map((row: any) => {
-            const q = row?.props ?? row;
-            if (String(q?.id) !== String(id)) return row;
-            const newProps = { ...q, qty: currentQty };
-            return row?.props ? { ...row, props: newProps } : newProps;
-          });
-        });
-        Alert.alert(
-          'No se pudo ajustar el stock',
-          'Se revirtió el cambio local.'
-        );
-      }
-    },
-    [app, data, rawProducts]
-  );
+      console.log('[ProductList] onDelta error', e);
+      Alert.alert(
+        'No se pudo ajustar el stock',
+        e?.message
+          ? `${e.message}\n\nEl cambio se revirtió.`
+          : 'Ocurrió un problema al guardar el cambio. El stock se revirtió.'
+      );
+    }
+  }, [app, data, rawProducts]);
 
   // Chips para fecha (editar)
   const setEditExpiryOffset = useCallback((days: number) => {
@@ -1398,51 +1391,54 @@ export default function ProductList({ navigation }: Props) {
   ]);
 
   // Eliminar (persistente con SQLite)
-  const onDelete = useCallback(
-    async (id: string) => {
-      try {
-        setDeleting(true);
+  const onDelete = useCallback(async (id: string) => {
+    try {
+      setDeleting(true);
 
-        if (typeof (productRepo as any)?.remove === 'function') {
-          await (productRepo as any).remove(id);
-        } else {
-          throw new Error('productRepo.remove no disponible');
-        }
-
-        setDeletedIds((prev) => {
-          const s = new Set(prev);
-          s.add(String(id));
-          return s;
-        });
-
-        setListState((prev) => {
-          if (!Array.isArray(prev) || prev.length === 0) return prev;
-          return prev.filter(
-            (r: any) =>
-              String((r?.props ?? r)?.id) !== String(id)
-          );
-        });
-
-        setShowEdit(false);
-        await fetch();
-
-        try {
-          await refreshExpiryNotifications();
-        } catch (err) {
-          console.log(
-            '[ProductList] error al refrescar notificaciones (eliminar)',
-            err
-          );
-        }
-      } catch (e) {
-        console.log('[ProductList] delete error', e);
-        Alert.alert('Error', 'No se pudo eliminar el producto.');
-      } finally {
-        setDeleting(false);
+      // ❗ Si el repo no está disponible o no tiene remove, avisamos
+      if (!productRepo || typeof (productRepo as any)?.remove !== 'function') {
+        Alert.alert(
+          'Función no disponible',
+          'No se pudo acceder a la base de datos para eliminar el producto.\n\n' +
+            'Es posible que el repositorio local no esté inicializado correctamente.'
+        );
+        return;
       }
-    },
-    [fetch]
-  );
+
+      await (productRepo as any).remove(id);
+
+      // Marcamos como eliminado en memoria
+      setDeletedIds(prev => {
+        const s = new Set(prev);
+        s.add(String(id));
+        return s;
+      });
+
+      setListState(prev => {
+        if (!Array.isArray(prev) || prev.length === 0) return prev;
+        return prev.filter((r: any) => String((r?.props ?? r)?.id) !== String(id));
+      });
+
+      setShowEdit(false);
+      await fetch();
+
+      try {
+        await refreshExpiryNotifications();
+      } catch (err) {
+        console.log('[ProductList] error al refrescar notificaciones (eliminar)', err);
+      }
+    } catch (e: any) {
+      console.log('[ProductList] delete error', e);
+      Alert.alert(
+        'Error',
+        e?.message
+          ? `No se pudo eliminar el producto.\n\n${e.message}`
+          : 'No se pudo eliminar el producto.'
+      );
+    } finally {
+      setDeleting(false);
+    }
+  }, [fetch]);
 
   const confirmDelete = useCallback(
     (id: string) => {
