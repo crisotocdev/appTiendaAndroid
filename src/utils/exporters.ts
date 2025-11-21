@@ -3,8 +3,22 @@ import { Platform, Alert } from 'react-native';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
 import * as Clipboard from 'expo-clipboard';
+import * as DocumentPicker from 'expo-document-picker';
 
 type Row = Record<string, string | number | null | undefined>;
+
+export type BackupRow = {
+  id?: string;
+  name?: string;
+  brand?: string;
+  category?: string;
+  sku?: string;
+  qty?: number | string | null;
+  minStock?: number | string | null;
+  nextExpiry?: string | null;
+  daysToExpiry?: number | string | null;
+  expiryStatus?: string | null;
+};
 
 const Encoding: any = (FileSystem as any).EncodingType ?? { UTF8: 'utf8' };
 const SAF: any = (FileSystem as any).StorageAccessFramework;
@@ -255,6 +269,66 @@ export async function backupRowsToJSON(
   } catch (err) {
     console.log('Error en backup JSON', err);
     Alert.alert('Error', 'No se pudo crear la copia de seguridad en JSON.');
+  }
+}
+
+/** Elegir y leer JSON de backup */
+export async function pickBackupRowsFromJSON(): Promise<BackupRow[] | null> {
+  try {
+    const res: any = await DocumentPicker.getDocumentAsync({
+      type: ['application/json', 'text/json', '*/*'],
+      copyToCacheDirectory: true,
+      multiple: false,
+    });
+
+    // Compatibilidad con APIs nuevas y antiguas
+    if (!res) return null;
+
+    // API nueva: { canceled, assets: [...] }
+    if ('canceled' in res) {
+      if (res.canceled) return null;
+      const asset = res.assets?.[0];
+      if (!asset?.uri) return null;
+      const uri = asset.uri;
+      const content = await FileSystem.readAsStringAsync(uri, {
+        encoding: Encoding.UTF8,
+      });
+      return normalizeBackupJSON(content);
+    }
+
+    // API antigua: { type: 'success' | 'cancel', uri, ... }
+    if (res.type === 'cancel') return null;
+    if (!res.uri) return null;
+
+    const content = await FileSystem.readAsStringAsync(res.uri, {
+      encoding: Encoding.UTF8,
+    });
+    return normalizeBackupJSON(content);
+  } catch (e: any) {
+    console.log('[exporters] pickBackupRowsFromJSON error', e);
+    Alert.alert(
+      'Error',
+      `No se pudo leer el archivo de backup.\n\n${e?.message ?? ''}`,
+    );
+    return null;
+  }
+}
+
+/**
+ * Intenta convertir el texto del JSON en un arreglo de BackupRow.
+ */
+function normalizeBackupJSON(text: string): BackupRow[] | null {
+  try {
+    const parsed = JSON.parse(text);
+
+    if (Array.isArray(parsed)) return parsed as BackupRow[];
+    if (Array.isArray((parsed as any)?.rows)) return (parsed as any).rows;
+    if (Array.isArray((parsed as any)?.data)) return (parsed as any).data;
+
+    return null;
+  } catch (e) {
+    Alert.alert('Backup inválido', 'El archivo JSON no tiene un formato válido.');
+    return null;
   }
 }
 

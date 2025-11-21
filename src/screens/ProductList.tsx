@@ -37,11 +37,11 @@ import {
 
 // ✅ Import único desde exporters.ts
 import {
-  backupRowsToJSON,
   saveProductsCSV,
   saveProductsJSON,
   shareProductsCSV,
   shareProductsJSON,
+  pickBackupRowsFromJSON,
 } from '../utils/exporters';
 
 type Props = NativeStackScreenProps<any>;
@@ -465,6 +465,7 @@ export default function ProductList({ navigation }: Props) {
   const [newExpiry, setNewExpiry] = useState(''); // YYYY-MM-DD
   const [photoUri, setPhotoUri] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+  const [newCategory, setNewCategory] = useState(''); // 👈 categoría (alta)
 
   // Estado local - modal de edición
   const [showEdit, setShowEdit] = useState(false);
@@ -478,10 +479,12 @@ export default function ProductList({ navigation }: Props) {
   const [editPhotoUri, setEditPhotoUri] = useState<string | null>(null);
   const [updating, setUpdating] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [editCategory, setEditCategory] = useState(''); // 👈 categoría (edición)
 
   // Búsqueda y filtros
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<FilterMode>('all');
+  const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
 
   // Fallbacks expuestos por provider
   const reload =
@@ -574,12 +577,7 @@ export default function ProductList({ navigation }: Props) {
           const q = p?.props ?? p;
 
           const id = String(
-            q?.id ??
-              q?.uuid ??
-              q?._id ??
-              q?.product_id ??
-              q?.pk ??
-              ''
+            q?.id ?? q?.uuid ?? q?._id ?? q?.product_id ?? q?.pk ?? ''
           );
 
           const nameRaw =
@@ -591,8 +589,7 @@ export default function ProductList({ navigation }: Props) {
             '';
 
           const name =
-            oneLine(nameRaw) ||
-            (id ? `Producto ${id}` : 'Producto s/n');
+            oneLine(nameRaw) || (id ? `Producto ${id}` : 'Producto s/n');
 
           const nextExpiry = pickExpiry(q);
           const expiry = expiryOf(nextExpiry ?? null);
@@ -603,30 +600,23 @@ export default function ProductList({ navigation }: Props) {
               : Number(q?.qty ?? q?.cantidad ?? q?.stock ?? 0) || 0;
 
           const minStock =
-            typeof q?.minStock === 'number' &&
-            Number.isFinite(q.minStock)
+            typeof q?.minStock === 'number' && Number.isFinite(q.minStock)
               ? q.minStock
-              : typeof q?.min_stock === 'number' &&
-                Number.isFinite(q.min_stock)
+              : typeof q?.min_stock === 'number' && Number.isFinite(q.min_stock)
               ? q.min_stock
-              : typeof q?.stockMin === 'number' &&
-                Number.isFinite(q.stockMin)
+              : typeof q?.stockMin === 'number' && Number.isFinite(q.stockMin)
               ? q.stockMin
               : Number.isFinite(
-                  Number(
-                    q?.minStock ?? q?.min_stock ?? q?.stockMin
-                  )
+                  Number(q?.minStock ?? q?.min_stock ?? q?.stockMin)
                 )
-              ? Number(
-                  q?.minStock ?? q?.min_stock ?? q?.stockMin
-                )
+              ? Number(q?.minStock ?? q?.min_stock ?? q?.stockMin)
               : 0;
 
           return {
             id,
             name,
             brand: oneLine(q?.brand ?? q?.marca ?? ''),
-            category: oneLine(q?.category ?? q?.categoria ?? ''),
+            category: oneLine(q?.category ?? q?.categoria ?? ''), // 👈 IMPORTANTE
             sku: oneLine(q?.sku ?? q?.codigo ?? q?.code ?? ''),
             photoUrl:
               q?.photoUrl ??
@@ -647,19 +637,12 @@ export default function ProductList({ navigation }: Props) {
       (it) => !deletedIds.has(String(it.id))
     );
 
-    if (
-      SKELETON_COUNT > 0 &&
-      loading &&
-      withoutDeleted.length === 0
-    ) {
-      return Array.from({ length: SKELETON_COUNT }).map(
-        (_, i) =>
-          ({
-            id: `skeleton-${i}`,
-            name: '',
-            __skeleton: true,
-          } as any)
-      );
+    if (SKELETON_COUNT > 0 && loading && withoutDeleted.length === 0) {
+      return Array.from({ length: SKELETON_COUNT }).map((_, i) => ({
+        id: `skeleton-${i}`,
+        name: '',
+        __skeleton: true,
+      })) as any[];
     }
 
     const sorted = [...withoutDeleted].sort((a, b) => {
@@ -692,15 +675,14 @@ export default function ProductList({ navigation }: Props) {
         )
       : sorted;
 
-    // 🎯 filtros rápidos
+    // 🎯 filtros rápidos (vencimiento / stock)
     const byFilter = bySearch.filter((p) => {
       if (filter === 'all') return true;
 
       const info = expiryOf(p.nextExpiry ?? null);
       const qty = Number(p.qty ?? 0);
       const minStockNum =
-        typeof p.minStock === 'number' &&
-        Number.isFinite(p.minStock)
+        typeof p.minStock === 'number' && Number.isFinite(p.minStock)
           ? p.minStock
           : 0;
 
@@ -718,7 +700,13 @@ export default function ProductList({ navigation }: Props) {
       }
     });
 
-    return byFilter;
+    // 🏷️ filtro por categoría (si hay una seleccionada)
+    const byCategory =
+      selectedCategory && selectedCategory !== 'ALL'
+        ? byFilter.filter((p) => (p.category || '') === selectedCategory)
+        : byFilter;
+
+    return byCategory;
   }, [
     rawProducts,
     loading,
@@ -726,7 +714,17 @@ export default function ProductList({ navigation }: Props) {
     search,
     filter,
     expiryOf,
+    selectedCategory,
   ]);
+
+  // 👇 NUEVO: lista de categorías únicas ordenadas
+  const categories = useMemo(() => {
+    const set = new Set<string>();
+    (data || []).forEach((p) => {
+      if (p.category) set.add(String(p.category));
+    });
+    return Array.from(set).sort();
+  }, [data]);
 
   // 📊 Resumen de inventario
   const summary = useMemo(() => {
@@ -742,8 +740,7 @@ export default function ProductList({ navigation }: Props) {
       const info = expiryOf(p.nextExpiry ?? null);
       const qty = Number(p.qty ?? 0);
       const minStock =
-        typeof p.minStock === 'number' &&
-        Number.isFinite(p.minStock)
+        typeof p.minStock === 'number' && Number.isFinite(p.minStock)
           ? p.minStock
           : 0;
 
@@ -784,25 +781,6 @@ export default function ProductList({ navigation }: Props) {
       };
     });
   }, [data, expiryOf]);
-
-  // 🔄 Backup JSON directo usando backupRowsToJSON
-  const handleBackupJSON = useCallback(async () => {
-    try {
-      const rows = buildExportRows();
-      if (!rows.length) {
-        Alert.alert(
-          'Sin datos',
-          'No hay productos para respaldar.'
-        );
-        return;
-      }
-
-      await backupRowsToJSON(rows, 'productos');
-    } catch (e: any) {
-      console.log('[ProductList] backup JSON error', e);
-      Alert.alert('Error', 'No se pudo crear el backup JSON.');
-    }
-  }, [buildExportRows]);
 
   // 📤 CSV: guardar o compartir
   const handleExportCSV = useCallback(
@@ -901,6 +879,88 @@ export default function ProductList({ navigation }: Props) {
     [buildExportRows]
   );
 
+  const handleRestoreBackup = useCallback(async () => {
+    try {
+      // 1) Elegir archivo
+      const rows = await pickBackupRowsFromJSON();
+      if (!rows || rows.length === 0) {
+        Alert.alert('Sin datos', 'El archivo de backup no contiene productos.');
+        return;
+      }
+
+      // 2) Confirmar si hay productos actualmente
+      if ((data || []).length > 0) {
+        const agree = await new Promise<boolean>((resolve) => {
+          Alert.alert(
+            'Restaurar backup',
+            'Esto agregará los productos del backup.\nSi ya tienes productos, se sumarán (no se borran automáticamente).',
+            [
+              { text: 'Cancelar', style: 'cancel', onPress: () => resolve(false) },
+              { text: 'Continuar', onPress: () => resolve(true) },
+            ],
+          );
+        });
+        if (!agree) return;
+      }
+
+      const createFn = pickCreateFn(app);
+      let inserted = 0;
+
+      for (const r of rows) {
+        const name = String(r.name ?? '').trim();
+        if (!name) continue;
+
+        const qtyNum = Math.max(0, Number(r.qty ?? 0) || 0);
+        const minStockNum = Math.max(0, Number(r.minStock ?? 0) || 0);
+        const nextExpiry =
+          typeof r.nextExpiry === 'string' && r.nextExpiry.trim()
+            ? r.nextExpiry.trim()
+            : null;
+
+        const payload = {
+          name,
+          brand: (r.brand as string | undefined)?.trim() || null,
+          category: (r.category as string | undefined)?.trim() || null,
+          sku: (r.sku as string | undefined)?.trim() || null,
+          qty: qtyNum,
+          minStock: minStockNum,
+          nextExpiry,
+          photoUrl: null,
+          photoUri: null,
+        };
+
+        if (typeof createFn === 'function') {
+          await createFn(payload);
+        } else if (typeof (productRepo as any)?.upsert === 'function') {
+          await (productRepo as any).upsert(payload);
+        } else if (typeof (productRepo as any)?.createProduct === 'function') {
+          await (productRepo as any).createProduct(payload);
+        } else {
+          // fallback: solo en memoria
+          const id = String(Date.now() + inserted);
+          setListState((prev) => ([...(prev || []), { id, ...payload } as any]));
+        }
+
+        inserted += 1;
+      }
+
+      await fetch();
+      try {
+        await refreshExpiryNotifications();
+      } catch (err) {
+        console.log('[ProductList] refresh notif after restore error', err);
+      }
+
+      Alert.alert('Backup restaurado', `Se restauraron ${inserted} productos.`);
+    } catch (e: any) {
+      console.log('[ProductList] restore backup error', e);
+      Alert.alert(
+        'Error',
+        `No se pudo restaurar el backup.\n\n${e?.message ?? ''}`,
+      );
+    }
+  }, [app, data, fetch]);
+
   // 🗄️ Menú: primero elegir CSV/JSON, luego guardar/compartir
   const openExportMenu = useCallback(() => {
     Alert.alert('Exportar / backup', '¿Qué deseas hacer?', [
@@ -936,9 +996,13 @@ export default function ProductList({ navigation }: Props) {
           ]);
         },
       },
+      {
+        text: 'Restaurar backup',
+        onPress: () => { void handleRestoreBackup(); },   // 👈 NUEVO
+      },
       { text: 'Salir', style: 'cancel' },
     ]);
-  }, [handleExportCSV, handleExportJSON]);
+  }, [handleExportCSV, handleExportJSON, handleRestoreBackup]);
 
   // Header (＋⏱, Exportar, ⚙️, Backup JSON)
   useLayoutEffect(() => {
@@ -992,13 +1056,22 @@ export default function ProductList({ navigation }: Props) {
             <Text style={{ fontSize: 18 }}>⚙️</Text>
           </TouchableOpacity>
 
-          {/* 🔁 NUEVO BOTÓN BACKUP DIRECTO (usa backupRowsToJSON) */}
+          {/* ☁️ Backup rápido JSON → Guardar / Compartir */}
           <TouchableOpacity
-            style={[
-              styles.exportButton,
-              { marginLeft: 8, marginRight: 4 },
-            ]}
-            onPress={handleBackupJSON}
+            style={styles.exportButton}
+            onPress={() =>
+              Alert.alert('Backup JSON', '¿Cómo quieres hacerlo?', [
+                {
+                  text: 'Guardar en dispositivo',
+                  onPress: () => handleExportJSON('save'),
+                },
+                {
+                  text: 'Compartir',
+                  onPress: () => handleExportJSON('share'),
+                },
+                { text: 'Cancelar', style: 'cancel' },
+              ])
+            }
           >
             <Text style={styles.exportLabel}>☁️</Text>
           </TouchableOpacity>
@@ -1010,7 +1083,7 @@ export default function ProductList({ navigation }: Props) {
     soonDays,
     openExportMenu,
     setExpiryOffset,
-    handleBackupJSON,
+    handleExportJSON,
   ]);
 
   const onRefresh = useCallback(async () => {
@@ -1179,6 +1252,7 @@ export default function ProductList({ navigation }: Props) {
     const payload = {
       name,
       brand: newBrand?.trim() || null,
+      category: newCategory?.trim() || null,
       sku: newSku?.trim() || null,
       qty: qtyNum,
       minStock: minStockNum,
@@ -1213,6 +1287,7 @@ export default function ProductList({ navigation }: Props) {
       setShowAdd(false);
       setNewName('');
       setNewBrand('');
+      setNewCategory('');
       setNewSku('');
       setNewQty('0');
       setNewMinStock('3');
@@ -1241,6 +1316,7 @@ export default function ProductList({ navigation }: Props) {
     app,
     newName,
     newBrand,
+    newCategory,
     newSku,
     newQty,
     newMinStock,
@@ -1254,6 +1330,7 @@ export default function ProductList({ navigation }: Props) {
     setEditId(item.id);
     setEditName(item.name || '');
     setEditBrand(item.brand || '');
+    setEditCategory(item.category || '');
     setEditSku(item.sku || '');
     setEditQty(
       Number.isFinite(Number(item.qty)) ? String(item.qty) : '0'
@@ -1314,6 +1391,7 @@ export default function ProductList({ navigation }: Props) {
       id,
       name,
       brand: editBrand?.trim() || null,
+      category: editCategory?.trim() || null,
       sku: editSku?.trim() || null,
       qty: qtyNum,
       minStock: minStockNum,
@@ -1382,6 +1460,7 @@ export default function ProductList({ navigation }: Props) {
     editId,
     editName,
     editBrand,
+    editCategory,
     editSku,
     editQty,
     editMinStock,
@@ -1854,6 +1933,36 @@ export default function ProductList({ navigation }: Props) {
         }
       />
 
+      {/* Chips por categoría */}
+      {categories.length > 0 && (
+        <View style={[styles.filterChipsRow, { marginTop: 4 }]}>
+          {categories.map((cat) => {
+            const active = selectedCategory === cat;
+            return (
+              <TouchableOpacity
+                key={cat}
+                style={[
+                  styles.filterChip,
+                  active && styles.filterChipActive,
+                ]}
+                onPress={() =>
+                  setSelectedCategory(active ? null : cat)
+                }
+              >
+                <Text
+                  style={[
+                    styles.filterChipText,
+                    active && styles.filterChipTextActive,
+                  ]}
+                >
+                  {cat}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+      )}
+
       {/* Modal: alta NUEVO producto */}
       <Modal
         visible={showAdd}
@@ -1950,6 +2059,20 @@ export default function ProductList({ navigation }: Props) {
                   placeholder="Ej: Kunstmann"
                   value={newBrand}
                   onChangeText={setNewBrand}
+                  style={styles.input}
+                  placeholderTextColor="rgba(255,255,255,0.5)"
+                />
+              </View>
+
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Categoría</Text>
+                <Text style={styles.fieldHint}>
+                  Ej: Fideos, Bebidas, Dulces
+                </Text>
+                <TextInput
+                  placeholder="Ej: Fideos"
+                  value={newCategory}
+                  onChangeText={setNewCategory}
                   style={styles.input}
                   placeholderTextColor="rgba(255,255,255,0.5)"
                 />
@@ -2216,6 +2339,20 @@ export default function ProductList({ navigation }: Props) {
                   placeholder="Ej: Kunstmann"
                   value={editBrand}
                   onChangeText={setEditBrand}
+                  style={styles.input}
+                  placeholderTextColor="rgba(255,255,255,0.5)"
+                />
+              </View>
+
+              <View style={styles.fieldGroup}>
+                <Text style={styles.fieldLabel}>Categoría</Text>
+                <Text style={styles.fieldHint}>
+                  Ej: Fideos, Bebidas, Dulces
+                </Text>
+                <TextInput
+                  placeholder="Ej: Fideos"
+                  value={editCategory}
+                  onChangeText={setEditCategory}
                   style={styles.input}
                   placeholderTextColor="rgba(255,255,255,0.5)"
                 />
