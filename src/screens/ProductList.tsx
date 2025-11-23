@@ -570,7 +570,8 @@ export default function ProductList({ navigation }: Props) {
     }
   }, [showAdd, newExpiry, setExpiryOffset, expiryCfg.soonThresholdDays]);
 
-  const data: Array<ProductVM & { __skeleton?: boolean }> = useMemo(() => {
+  // 1) Base: mapeo de productos crudos → ProductVM ordenados
+  const baseItems: Array<ProductVM & { __skeleton?: boolean }> = useMemo(() => {
     const mapped =
       (rawProducts ?? [])
         .map((p: any) => {
@@ -637,6 +638,7 @@ export default function ProductList({ navigation }: Props) {
       (it) => !deletedIds.has(String(it.id))
     );
 
+    // Skeletons mientras carga y no hay datos
     if (SKELETON_COUNT > 0 && loading && withoutDeleted.length === 0) {
       return Array.from({ length: SKELETON_COUNT }).map((_, i) => ({
         id: `skeleton-${i}`,
@@ -645,6 +647,7 @@ export default function ProductList({ navigation }: Props) {
       })) as any[];
     }
 
+    // Orden por estado de vencimiento y días
     const sorted = [...withoutDeleted].sort((a, b) => {
       const ea = expiryOf(a.nextExpiry ?? null);
       const eb = expiryOf(b.nextExpiry ?? null);
@@ -665,15 +668,25 @@ export default function ProductList({ navigation }: Props) {
       return da - db;
     });
 
+    return sorted;
+  }, [rawProducts, loading, deletedIds, expiryOf]);
+
+  // 2) Filtros combinados: texto + estado + categoría
+  const data: Array<ProductVM & { __skeleton?: boolean }> = useMemo(() => {
+    // Si estamos mostrando skeletons, no filtrar (da lo mismo mientras carga)
+    if (baseItems.some((it) => (it as any).__skeleton)) {
+      return baseItems;
+    }
+
     // 🔍 filtro por texto
     const searchTrim = search.trim().toLowerCase();
     const bySearch = searchTrim
-      ? sorted.filter((p) =>
+      ? baseItems.filter((p) =>
           `${p.name} ${p.brand ?? ''} ${p.sku ?? ''}`
             .toLowerCase()
             .includes(searchTrim)
         )
-      : sorted;
+      : baseItems;
 
     // 🎯 filtros rápidos (vencimiento / stock)
     const byFilter = bySearch.filter((p) => {
@@ -707,24 +720,18 @@ export default function ProductList({ navigation }: Props) {
         : byFilter;
 
     return byCategory;
-  }, [
-    rawProducts,
-    loading,
-    deletedIds,
-    search,
-    filter,
-    expiryOf,
-    selectedCategory,
-  ]);
+  }, [baseItems, search, filter, expiryOf, selectedCategory]);
 
-  // 👇 NUEVO: lista de categorías únicas ordenadas
-  const categories = useMemo(() => {
+    // 👇 Lista de categorías únicas ordenadas (a partir de todo el inventario)
+    const categories = useMemo(() => {
     const set = new Set<string>();
-    (data || []).forEach((p) => {
-      if (p.category) set.add(String(p.category));
+    (baseItems || []).forEach((p) => {
+      if (!(p as any).__skeleton && p.category) {
+        set.add(String(p.category));
+      }
     });
     return Array.from(set).sort();
-  }, [data]);
+  }, [baseItems]);
 
   // 📊 Resumen de inventario
   const summary = useMemo(() => {
@@ -1908,60 +1915,69 @@ export default function ProductList({ navigation }: Props) {
         </TouchableOpacity>
       </View>
 
-      {/* Lista principal */}
-      <FlatList
-        data={data}
-        keyExtractor={(it) => String(it.id)}
-        renderItem={renderItem}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-          />
-        }
-        ListEmptyComponent={
-          !loading ? <EmptyState /> : null
-        }
-        contentContainerStyle={
-          data.length === 0
-            ? {
-                flex: 1,
-                justifyContent: 'center',
-                alignItems: 'center',
-              }
-            : undefined
-        }
-      />
+      {/* Categorías (fila fija arriba, distinta a los filtros de estado) */}
+{categories.length > 0 && (
+  <View style={styles.categorySection}>
+    <Text style={styles.categoryTitle}>Categorías</Text>
 
-      {/* Chips por categoría */}
-      {categories.length > 0 && (
-        <View style={[styles.filterChipsRow, { marginTop: 4 }]}>
-          {categories.map((cat) => {
-            const active = selectedCategory === cat;
-            return (
-              <TouchableOpacity
-                key={cat}
-                style={[
-                  styles.filterChip,
-                  active && styles.filterChipActive,
-                ]}
-                onPress={() =>
-                  setSelectedCategory(active ? null : cat)
-                }
-              >
-                <Text
-                  style={[
-                    styles.filterChipText,
-                    active && styles.filterChipTextActive,
-                  ]}
-                >
-                  {cat}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-      )}
+    <ScrollView
+      horizontal
+      showsHorizontalScrollIndicator={false}
+      contentContainerStyle={styles.categoryChipsRow}
+    >
+      {categories.map((cat) => {
+        const active = selectedCategory === cat;
+        return (
+          <TouchableOpacity
+            key={cat}
+            style={[
+              styles.categoryChip,
+              active && styles.categoryChipActive,
+            ]}
+            onPress={() =>
+              setSelectedCategory(active ? null : cat)
+            }
+          >
+            <Text
+              style={[
+                styles.categoryChipText,
+                active && styles.categoryChipTextActive,
+              ]}
+            >
+              {cat}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </ScrollView>
+  </View>
+)}
+
+{/* Lista principal */}
+<FlatList
+  data={data}
+  keyExtractor={(it) => String(it.id)}
+  renderItem={renderItem}
+  refreshControl={
+    <RefreshControl
+      refreshing={refreshing}
+      onRefresh={onRefresh}
+    />
+  }
+  ListEmptyComponent={
+    !loading ? <EmptyState /> : null
+  }
+  contentContainerStyle={
+    data.length === 0
+      ? {
+          flex: 1,
+          justifyContent: 'center',
+          alignItems: 'center',
+        }
+      : undefined
+  }
+/>
+
 
       {/* Modal: alta NUEVO producto */}
       <Modal
@@ -2978,4 +2994,46 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
   },
+  categorySection: {
+  marginTop: 4,
+  marginBottom: 12,
+},
+
+categoryTitle: {
+  color: '#AEE9FF',
+  fontSize: 13,
+  fontWeight: '600',
+  marginBottom: 4,
+},
+
+categoryChipsRow: {
+  flexDirection: 'row',
+  alignItems: 'center',
+  paddingRight: 8,
+  gap: 8,
+},
+
+categoryChip: {
+  borderRadius: 999,
+  borderWidth: 1,
+  borderColor: 'rgba(170, 230, 255, 0.6)',
+  paddingHorizontal: 10,
+  paddingVertical: 4,
+  backgroundColor: 'transparent',
+},
+
+categoryChipActive: {
+  backgroundColor: '#13B38B',
+  borderColor: '#13B38B',
+},
+
+categoryChipText: {
+  color: '#AEE9FF',
+  fontSize: 12,
+},
+
+categoryChipTextActive: {
+  color: '#04121B',
+  fontWeight: '700',
+},
 });
