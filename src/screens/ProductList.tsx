@@ -43,6 +43,8 @@ import {
   shareProductsJSON,
   pickBackupRowsFromJSON,
 } from '../utils/exporters';
+import { isValidYMD } from '../utils/dateUtils';
+
 
 type Props = NativeStackScreenProps<any>;
 
@@ -81,19 +83,6 @@ function getStockStatus(
 const oneLine = (v: any): string =>
   String(v ?? '').replace(/[\r\n\u2028\u2029]/g, ' ').trim();
 
-function isValidYMD(value: string): boolean {
-  if (!value) return false;
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-
-  const [y, m, d] = value.split('-').map(Number);
-  const date = new Date(y, m - 1, d);
-
-  return (
-    date.getFullYear() === y &&
-    date.getMonth() === m - 1 &&
-    date.getDate() === d
-  );
-}
 
 function pickExpiry(q: any): string | null {
   const raw =
@@ -761,6 +750,21 @@ export default function ProductList({ navigation }: Props) {
 
     return { total, expSoon, expired, outOfStock, lowStock };
   }, [data, expiryOf]);
+
+    // ¿Hay productos en bruto (antes de filtros)?
+  const hasAnyProducts = useMemo(
+    () => (rawProducts ?? []).length > 0,
+    [rawProducts]
+  );
+
+  // ¿Hay búsqueda / filtros / categoría aplicados?
+  const hasActiveFilters = useMemo(
+    () =>
+      !!search.trim() ||
+      filter !== 'all' ||
+      (selectedCategory && selectedCategory !== 'ALL'),
+    [search, filter, selectedCategory]
+  );
 
   // 🔧 Helper común para armar filas de exportación (CSV/JSON/Backup)
   const buildExportRows = useCallback(() => {
@@ -1690,23 +1694,77 @@ export default function ProductList({ navigation }: Props) {
     );
   };
 
-  const EmptyState = () => (
+const EmptyState = ({
+  hasAnyProducts,
+  hasActiveFilters,
+  onClearFilters,
+  onAddProduct,
+}: {
+  hasAnyProducts: boolean;
+  hasActiveFilters: boolean;
+  onClearFilters: () => void;
+  onAddProduct: () => void;
+}) => {
+  // Caso 1: no hay ningún producto en el inventario
+  if (!hasAnyProducts) {
+    return (
+      <View style={styles.emptyWrap}>
+        <Text style={styles.emptyTitle}>No hay productos</Text>
+        <Text style={styles.emptySubtitle}>
+          Agrega el primero para comenzar.
+        </Text>
+        <TouchableOpacity
+          style={[styles.addButton, styles.primary]}
+          onPress={onAddProduct}
+        >
+          <Text style={styles.addButtonText}>
+            Agregar producto
+          </Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // Caso 2: sí hay productos, pero los filtros dejan la lista vacía
+  if (hasActiveFilters) {
+    return (
+      <View style={styles.emptyWrap}>
+        <Text style={styles.emptyTitle}>Sin resultados</Text>
+        <Text style={styles.emptySubtitle}>
+          No hay productos que coincidan con la búsqueda
+          o filtros actuales.
+        </Text>
+        <TouchableOpacity
+          style={[styles.addButton, styles.secondary]}
+          onPress={onClearFilters}
+        >
+          <Text style={styles.addButtonText}>
+            Limpiar filtros
+          </Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
+
+  // Fallback raro (por si acaso)
+  return (
     <View style={styles.emptyWrap}>
-      <Text style={styles.emptyTitle}>No hay productos</Text>
+      <Text style={styles.emptyTitle}>No hay productos visibles</Text>
       <Text style={styles.emptySubtitle}>
-        Agrega el primero para comenzar.
+        Puedes ajustar los filtros o agregar un nuevo producto.
       </Text>
       <TouchableOpacity
         style={[styles.addButton, styles.primary]}
-        onPress={() => {
-          setExpiryOffset(soonDays);
-          setShowAdd(true);
-        }}
+        onPress={onAddProduct}
       >
-        <Text style={styles.addButtonText}>Agregar producto</Text>
+        <Text style={styles.addButtonText}>
+          Agregar producto
+        </Text>
       </TouchableOpacity>
     </View>
   );
+};
+
 
   return (
     <View style={styles.container}>
@@ -1965,8 +2023,23 @@ export default function ProductList({ navigation }: Props) {
     />
   }
   ListEmptyComponent={
-    !loading ? <EmptyState /> : null
-  }
+  !loading ? (
+    <EmptyState
+      hasAnyProducts={hasAnyProducts}
+      hasActiveFilters={hasActiveFilters}
+      onClearFilters={() => {
+        setSearch('');
+        setFilter('all');
+        setSelectedCategory(null);
+      }}
+      onAddProduct={() => {
+        setExpiryOffset(soonDays);
+        setShowAdd(true);
+      }}
+    />
+  ) : null
+}
+
   contentContainerStyle={
     data.length === 0
       ? {
