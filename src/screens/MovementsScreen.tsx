@@ -1,11 +1,12 @@
 // src/screens/MovementsScreen.tsx
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, Text, FlatList, StyleSheet, Alert, RefreshControl } from 'react-native';
+import { View, Text, FlatList, StyleSheet, RefreshControl } from 'react-native';
 import type { NativeStackScreenProps } from '@react-navigation/native-stack';
 import { useFocusEffect } from '@react-navigation/native';
 import dayjs from 'dayjs';
 import 'dayjs/locale/es';
-import { useApp } from '../ui/providers/AppProvider';
+
+import { MovementRepoSQLite } from '../infrastructure/persistence/sqlite/MovementRepoSQLite';
 
 type Props = NativeStackScreenProps<any>;
 
@@ -18,141 +19,194 @@ type MovementVM = {
   createdAt: string | null; // ISO
 };
 
-// === Helpers para casos de uso (preservan this) ===
-const invoke = async (uc: any, payload?: any) => {
-  if (!uc) return undefined;
-  if (typeof uc === 'function') return await uc(payload);
-  if (typeof uc.execute === 'function') return await uc.execute.call(uc, payload);
-  if (typeof uc.run === 'function') return await uc.run.call(uc, payload);
-  return undefined;
-};
+const movementRepo = new MovementRepoSQLite();
 
-const invokeFirst = async (candidates: any[], payload?: any) => {
-  for (const c of candidates) {
-    const res = await invoke(c, payload);
-    if (res !== undefined) return res;
-  }
-  return undefined;
-};
+export default function MovementsScreen({ route, navigation }: Props) {
+  const { productId, productName } = route.params ?? {};
 
-export default function MovementsScreen({ route }: Props) {
-  const { productId, productName } = route.params;
-  const { usecases } = useApp();
-
-  const [data, setData] = useState<MovementVM[]>([]);
+  const [rows, setRows] = useState<MovementVM[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const toVM = useCallback(
-    (m: any): MovementVM => {
-      const p = m?.props ?? m ?? {};
-      return {
-        id: String(p.id ?? `${p.type ?? 'ADJUST'}-${p.createdAt ?? Date.now()}`),
-        productId: String(p.productId ?? productId),
-        type: (p.type ?? 'ADJUST') as MovementVM['type'],
-        qty: Number(p.qty ?? 0),
-        note: p.note ?? null,
-        createdAt: p.createdAt ?? null,
-      };
-    },
-    [productId]
-  );
-
   const load = useCallback(async () => {
+    if (!productId) return;
+    setLoading(true);
     try {
-      setLoading(true);
-      const u: any = usecases as any;
+      const list = await movementRepo.listByProduct(String(productId));
 
-      // Candidatos típicos de UC para listar movimientos por producto
-      const candidates = [
-        u?.getMovementsByProduct,
-        u?.movements?.byProduct,
-        u?.listMovementsByProduct,
-        u?.movements?.listByProduct,
-        u?.movements?.listForProduct,
-      ];
+      const mapped: MovementVM[] = (list ?? []).map((m: any) => {
+        const p = m?.props ?? m ?? {};
+        return {
+          id: String(p.id),
+          productId: String(p.productId ?? productId),
+          type: (p.type ?? 'ADJUST') as MovementVM['type'],
+          qty: Number(p.qty ?? 0),
+          note: p.note ?? null,
+          createdAt: p.createdAt ?? null,
+        };
+      });
 
-      // Probar primero con string (id) y si no, con objeto { productId }
-      const rows =
-        (await invokeFirst(candidates, String(productId))) ??
-        (await invokeFirst(candidates, { productId: String(productId) }));
-
-      if (!rows) throw new Error('No se encontró un caso de uso para listar movimientos.');
-
-      const list = (rows ?? []).map(toVM);
-
-      list.sort((a, b) => {
+      // Ordenar del más reciente al más antiguo
+      mapped.sort((a, b) => {
         const da = a.createdAt ? Date.parse(a.createdAt) : 0;
         const db = b.createdAt ? Date.parse(b.createdAt) : 0;
         return db - da;
       });
 
-      setData(list);
-    } catch (e: any) {
-      Alert.alert('Error', e?.message ?? 'No se pudo cargar el historial.');
-      setData([]);
+      setRows(mapped);
+    } catch (e) {
+      console.log('[MovementsScreen] load error', e);
+      setRows([]);
     } finally {
       setLoading(false);
     }
-  }, [productId, toVM, usecases]);
+  }, [productId]);
 
   useEffect(() => {
-    load();
-  }, [load]);
+    navigation.setOptions({
+      title: productName ? `Historial — ${productName}` : 'Historial de movimientos',
+    });
+  }, [navigation, productName]);
 
   useFocusEffect(
     useCallback(() => {
       load();
-      return () => {};
+      return undefined;
     }, [load])
   );
 
+  const renderItem = ({ item }: { item: MovementVM }) => {
+    const sign = item.type === 'OUT' ? '-' : item.type === 'IN' ? '+' : '';
+    const badgeLabel =
+      item.type === 'IN'
+        ? 'ENTRADA'
+        : item.type === 'OUT'
+        ? 'SALIDA'
+        : 'AJUSTE';
+
+    const dateLabel = item.createdAt
+      ? dayjs(item.createdAt).locale('es').format('DD/MM/YYYY HH:mm')
+      : '—';
+
+    return (
+      <View style={styles.row}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.date}>{dateLabel}</Text>
+          <Text style={styles.qty}>
+            {sign}
+            {item.qty}
+          </Text>
+          {item.note ? <Text style={styles.note}>{item.note}</Text> : null}
+        </View>
+        <Text
+          style={[
+            styles.badge,
+            item.type === 'IN'
+              ? styles.inBadge
+              : item.type === 'OUT'
+              ? styles.outBadge
+              : styles.adjustBadge,
+          ]}
+        >
+          {badgeLabel}
+        </Text>
+      </View>
+    );
+  };
+
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Historial — {productName}</Text>
-      <FlatList
-        data={data}
-        refreshControl={<RefreshControl refreshing={loading} onRefresh={load} />}
-        keyExtractor={(it) => it.id}
-        ListEmptyComponent={<Text style={styles.empty}>Sin movimientos</Text>}
-        renderItem={({ item }) => (
-          <View style={styles.row}>
-            <Text
-              style={[
-                styles.type,
-                item.type === 'IN' ? styles.in : item.type === 'OUT' ? styles.out : styles.adjust,
-              ]}
-            >
-              {item.type}
-            </Text>
-            <Text style={styles.qty}>x{item.qty}</Text>
-            <Text style={styles.date}>
-              {item.createdAt ? dayjs(item.createdAt).locale('es').format('DD/MM/YYYY HH:mm') : '—'}
-            </Text>
-            {!!item.note && <Text style={styles.note}>{item.note}</Text>}
-          </View>
-        )}
-      />
+      {rows.length === 0 && !loading ? (
+        <View style={styles.emptyWrap}>
+          <Text style={styles.emptyText}>
+            Todavía no hay movimientos para este producto.
+          </Text>
+        </View>
+      ) : (
+        <FlatList
+          data={rows}
+          keyExtractor={(it) => it.id}
+          renderItem={renderItem}
+          refreshControl={
+            <RefreshControl refreshing={loading} onRefresh={load} />
+          }
+          contentContainerStyle={
+            rows.length === 0
+              ? { flex: 1, justifyContent: 'center' }
+              : { paddingVertical: 8 }
+          }
+        />
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 16, backgroundColor: '#fff' },
-  title: { fontSize: 18, fontWeight: '700', marginBottom: 10 },
-  empty: { textAlign: 'center', color: '#6b7280', marginTop: 20 },
+  container: {
+    flex: 1,
+    backgroundColor: '#08141A',
+    paddingHorizontal: 12,
+    paddingTop: 8,
+  },
+  emptyWrap: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyText: {
+    color: '#E5E7EB',
+    fontSize: 14,
+  },
   row: {
     flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
     paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#eee',
+    paddingHorizontal: 12,
+    borderRadius: 12,
+    backgroundColor: 'rgba(24, 50, 66, 0.7)',
+    borderWidth: 1,
+    borderColor: 'rgba(94, 231, 255, 0.35)',
+    marginBottom: 8,
+    alignItems: 'center',
   },
-  type: { fontWeight: '700', width: 70, textAlign: 'center' },
-  in: { color: '#065f46' },
-  out: { color: '#991b1b' },
-  adjust: { color: '#1f2937' },
-  qty: { width: 60 },
-  date: { flex: 1, color: '#374151' },
-  note: { color: '#6b7280' },
+  date: {
+    color: '#CFE8FF',
+    fontSize: 12,
+    marginBottom: 4,
+  },
+  qty: {
+    color: '#EFFFFB',
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  note: {
+    color: '#CFE8CF',
+    fontSize: 11,
+    marginTop: 2,
+    opacity: 0.9,
+  },
+  badge: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    fontSize: 11,
+    fontWeight: '800',
+    overflow: 'hidden',
+  },
+  inBadge: {
+    backgroundColor: 'rgba(16,185,129,0.20)',
+    color: '#6EE7B7',
+    borderWidth: 1,
+    borderColor: 'rgba(16,185,129,0.7)',
+  },
+  outBadge: {
+    backgroundColor: 'rgba(248,113,113,0.20)',
+    color: '#FCA5A5',
+    borderWidth: 1,
+    borderColor: 'rgba(248,113,113,0.7)',
+  },
+  adjustBadge: {
+    backgroundColor: 'rgba(59,130,246,0.20)',
+    color: '#BFDBFE',
+    borderWidth: 1,
+    borderColor: 'rgba(59,130,246,0.7)',
+  },
 });

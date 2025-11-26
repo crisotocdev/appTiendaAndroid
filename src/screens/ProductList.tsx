@@ -44,7 +44,10 @@ import {
   pickBackupRowsFromJSON,
 } from '../utils/exporters';
 import { isValidYMD } from '../utils/dateUtils';
+// OJO: ruta relativa desde ProductList.tsx
+import { MovementRepoSQLite } from '../infrastructure/persistence/sqlite/MovementRepoSQLite';
 
+const movementRepo = new MovementRepoSQLite();
 
 type Props = NativeStackScreenProps<any>;
 
@@ -82,7 +85,6 @@ function getStockStatus(
 /** Utils **/
 const oneLine = (v: any): string =>
   String(v ?? '').replace(/[\r\n\u2028\u2029]/g, ' ').trim();
-
 
 function pickExpiry(q: any): string | null {
   const raw =
@@ -711,8 +713,8 @@ export default function ProductList({ navigation }: Props) {
     return byCategory;
   }, [baseItems, search, filter, expiryOf, selectedCategory]);
 
-    // 👇 Lista de categorías únicas ordenadas (a partir de todo el inventario)
-    const categories = useMemo(() => {
+  // 👇 Lista de categorías únicas ordenadas (a partir de todo el inventario)
+  const categories = useMemo(() => {
     const set = new Set<string>();
     (baseItems || []).forEach((p) => {
       if (!(p as any).__skeleton && p.category) {
@@ -751,7 +753,7 @@ export default function ProductList({ navigation }: Props) {
     return { total, expSoon, expired, outOfStock, lowStock };
   }, [data, expiryOf]);
 
-    // ¿Hay productos en bruto (antes de filtros)?
+  // ¿Hay productos en bruto (antes de filtros)?
   const hasAnyProducts = useMemo(
     () => (rawProducts ?? []).length > 0,
     [rawProducts]
@@ -1103,77 +1105,97 @@ export default function ProductList({ navigation }: Props) {
     setRefreshing(false);
   }, [fetch]);
 
-  const onDelta = useCallback(async (id: string, delta: number) => {
-    const currentRow = (data || []).find((x) => String(x.id) === String(id));
-    const currentQty = Number(currentRow?.qty ?? 0);
-    const nextQty = Math.max(0, currentQty + delta);
+    const onDelta = useCallback(
+    async (id: string, delta: number) => {
+      if (!delta) return;
 
-    const minStock = Number(currentRow?.minStock ?? 0);
+      const currentRow = (data || []).find((x) => String(x.id) === String(id));
+      const currentQty = Number(currentRow?.qty ?? 0);
+      const nextQty = Math.max(0, currentQty + delta);
 
-    const prevStatus = getStockStatus(currentQty, minStock);
-    const nextStatus = getStockStatus(nextQty, minStock);
+      const minStock = Number(currentRow?.minStock ?? 0);
 
-    // 👇 Actualizamos UI optimistamente
-    setListState((prev) => {
-      const base = (Array.isArray(prev) && prev.length ? prev : rawProducts) || [];
-      return base.map((row: any) => {
-        const q = row?.props ?? row;
-        if (String(q?.id) !== String(id)) return row;
-        const newProps = { ...q, qty: nextQty };
-        return row?.props ? { ...row, props: newProps } : newProps;
-      });
-    });
+      const prevStatus = getStockStatus(currentQty, minStock);
+      const nextStatus = getStockStatus(nextQty, minStock);
 
-    try {
-      const runUpdate = pickUpdateQtyFn(app);
-      const hasRepoUpdate =
-        typeof (productRepo as any)?.updateProductQty === 'function' ||
-        typeof (productRepo as any)?.adjustStock === 'function';
-
-      // ❗ Si no hay NINGÚN método para persistir, avisamos y revertimos
-      if (!runUpdate && !hasRepoUpdate) {
-        throw new Error('No hay repositorio configurado para actualizar el stock.');
-      }
-
-      if (typeof runUpdate === 'function') {
-        await tryUpdateQtyWithPayloads(runUpdate, id, nextQty, currentRow);
-      } else if (typeof (productRepo as any)?.updateProductQty === 'function') {
-        await (productRepo as any).updateProductQty(id, nextQty);
-      } else if (typeof (productRepo as any)?.adjustStock === 'function') {
-        await (productRepo as any).adjustStock(id, nextQty - currentQty);
-      }
-
-      // Notificación de alerta de stock si cambia el estado
-      if (prevStatus !== nextStatus && nextStatus !== 'ok') {
-        const statusType = nextStatus === 'none' ? 'out' : 'low';
-        void notifyStockAlert({
-          name: currentRow?.name ?? 'Producto',
-          status: statusType,
-          qty: nextQty,
-          minStock,
-        });
-      }
-    } catch (e: any) {
-      // 👇 Revertimos el cambio local si algo falla
+      // 👇 Actualizamos UI optimistamente
       setListState((prev) => {
         const base = (Array.isArray(prev) && prev.length ? prev : rawProducts) || [];
         return base.map((row: any) => {
           const q = row?.props ?? row;
           if (String(q?.id) !== String(id)) return row;
-          const newProps = { ...q, qty: currentQty };
+          const newProps = { ...q, qty: nextQty };
           return row?.props ? { ...row, props: newProps } : newProps;
         });
       });
 
-      console.log('[ProductList] onDelta error', e);
-      Alert.alert(
-        'No se pudo ajustar el stock',
-        e?.message
-          ? `${e.message}\n\nEl cambio se revirtió.`
-          : 'Ocurrió un problema al guardar el cambio. El stock se revirtió.'
-      );
-    }
-  }, [app, data, rawProducts]);
+      try {
+        const runUpdate = pickUpdateQtyFn(app);
+        const hasRepoUpdate =
+          typeof (productRepo as any)?.updateProductQty === 'function' ||
+          typeof (productRepo as any)?.adjustStock === 'function';
+
+        // ❗ Si no hay NINGÚN método para persistir, avisamos y revertimos
+        if (!runUpdate && !hasRepoUpdate) {
+          throw new Error('No hay repositorio configurado para actualizar el stock.');
+        }
+
+        if (typeof runUpdate === 'function') {
+          await tryUpdateQtyWithPayloads(runUpdate, id, nextQty, currentRow);
+        } else if (typeof (productRepo as any)?.updateProductQty === 'function') {
+          await (productRepo as any).updateProductQty(id, nextQty);
+        } else if (typeof (productRepo as any)?.adjustStock === 'function') {
+          await (productRepo as any).adjustStock(id, nextQty - currentQty);
+        }
+
+        // 📝 Registrar movimiento en historial (no rompemos el stock si falla)
+        try {
+          const type: 'IN' | 'OUT' | 'ADJUST' =
+            delta > 0 ? 'IN' : delta < 0 ? 'OUT' : 'ADJUST';
+
+          await movementRepo.register({
+            productId: id,
+            type,
+            qty: Math.abs(delta),
+            note: null,
+          });
+        } catch (err) {
+          console.log('[ProductList] error registrando movimiento', err);
+        }
+
+        // Notificación de alerta de stock si cambia el estado
+        if (prevStatus !== nextStatus && nextStatus !== 'ok') {
+          const statusType = nextStatus === 'none' ? 'out' : 'low';
+          void notifyStockAlert({
+            name: currentRow?.name ?? 'Producto',
+            status: statusType,
+            qty: nextQty,
+            minStock,
+          });
+        }
+      } catch (e: any) {
+        // 👇 Revertimos el cambio local si algo falla en la PERSISTENCIA de stock
+        setListState((prev) => {
+          const base = (Array.isArray(prev) && prev.length ? prev : rawProducts) || [];
+          return base.map((row: any) => {
+            const q = row?.props ?? row;
+            if (String(q?.id) !== String(id)) return row;
+            const newProps = { ...q, qty: currentQty };
+            return row?.props ? { ...row, props: newProps } : newProps;
+          });
+        });
+
+        console.log('[ProductList] onDelta error', e);
+        Alert.alert(
+          'No se pudo ajustar el stock',
+          e?.message
+            ? `${e.message}\n\nEl cambio se revirtió.`
+            : 'Ocurrió un problema al guardar el cambio. El stock se revirtió.'
+        );
+      }
+    },
+    [app, data, rawProducts]
+  );
 
   // Chips para fecha (editar)
   const setEditExpiryOffset = useCallback((days: number) => {
@@ -1185,7 +1207,7 @@ export default function ProductList({ navigation }: Props) {
 
   // Foto: helpers
   const pickFromLibrary = useCallback(
-    async (setUri: (u: string) => void) => {
+    async (setUri: (u: string | null) => void) => {
       const { status } =
         await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== 'granted') {
@@ -1208,7 +1230,7 @@ export default function ProductList({ navigation }: Props) {
   );
 
   const takePhoto = useCallback(
-    async (setUri: (u: string) => void) => {
+    async (setUri: (u: string | null) => void) => {
       const { status } =
         await ImagePicker.requestCameraPermissionsAsync();
       if (status !== 'granted') {
@@ -1548,7 +1570,7 @@ export default function ProductList({ navigation }: Props) {
     [onDelete]
   );
 
-  const renderItem = ({
+    const renderItem = ({
     item,
   }: {
     item: ProductVM & { __skeleton?: boolean };
@@ -1558,14 +1580,14 @@ export default function ProductList({ navigation }: Props) {
     const expiry = expiryOf(item.nextExpiry ?? null);
     const qty = Number(item.qty ?? 0);
     const minStock =
-      typeof item.minStock === 'number' &&
-      Number.isFinite(item.minStock)
+      typeof item.minStock === 'number' && Number.isFinite(item.minStock)
         ? item.minStock
         : 0;
 
     const isOutOfStock = qty === 0;
-    const isLowStock =
-      !isOutOfStock && minStock > 0 && qty <= minStock;
+    const isLowStock = !isOutOfStock && minStock > 0 && qty <= minStock;
+    const missingToMin =
+      isLowStock && minStock > 0 ? Math.max(0, minStock - qty) : 0;
 
     return (
       <View style={styles.card}>
@@ -1581,14 +1603,9 @@ export default function ProductList({ navigation }: Props) {
             }}
           >
             {item.photoUrl ? (
-              <Image
-                source={{ uri: item.photoUrl }}
-                style={styles.thumb}
-              />
+              <Image source={{ uri: item.photoUrl }} style={styles.thumb} />
             ) : (
-              <View
-                style={[styles.thumb, styles.thumbEmpty]}
-              />
+              <View style={[styles.thumb, styles.thumbEmpty]} />
             )}
 
             <View style={{ width: 12 }} />
@@ -1596,15 +1613,11 @@ export default function ProductList({ navigation }: Props) {
             <View style={styles.mainCol}>
               <Text style={styles.name}>{item.name}</Text>
               <Text style={styles.meta}>
-                {[
-                  item.brand,
-                  item.category,
-                  item.sku,
-                ]
-                  .filter(Boolean)
-                  .join(' · ') || '—'}
+                {[item.brand, item.category, item.sku].filter(Boolean).join(' · ') ||
+                  '—'}
               </Text>
 
+              {/* Pills de vencimiento + stock */}
               <View style={styles.pillRow}>
                 <View
                   style={[
@@ -1612,42 +1625,31 @@ export default function ProductList({ navigation }: Props) {
                     {
                       backgroundColor: expiry.color,
                       borderColor: expiry.color,
-                      opacity:
-                        expiry.status === 'none' ? 0.4 : 1,
+                      opacity: expiry.status === 'none' ? 0.4 : 1,
                     },
                   ]}
                 >
-                  <Text style={styles.expiryPillText}>
-                    {expiry.label}
-                  </Text>
+                  <Text style={styles.expiryPillText}>{expiry.label}</Text>
                 </View>
 
                 {isOutOfStock && (
-                  <View
-                    style={[
-                      styles.expiryPill,
-                      styles.lowStockPill,
-                    ]}
-                  >
-                    <Text style={styles.expiryPillText}>
-                      SIN STOCK
-                    </Text>
+                  <View style={[styles.expiryPill, styles.lowStockPill]}>
+                    <Text style={styles.expiryPillText}>SIN STOCK</Text>
                   </View>
                 )}
 
                 {isLowStock && (
-                  <View
-                    style={[
-                      styles.expiryPill,
-                      styles.lowStockPill,
-                    ]}
-                  >
-                    <Text style={styles.expiryPillText}>
-                      BAJO STOCK
-                    </Text>
+                  <View style={[styles.expiryPill, styles.lowStockPill]}>
+                    <Text style={styles.expiryPillText}>BAJO STOCK</Text>
                   </View>
                 )}
               </View>
+
+              {isLowStock && missingToMin > 0 && (
+                <Text style={styles.missingText}>
+                  Faltan {missingToMin} unidades para el stock mínimo ({minStock})
+                </Text>
+              )}
             </View>
           </TouchableOpacity>
 
@@ -1664,8 +1666,7 @@ export default function ProductList({ navigation }: Props) {
             <Text
               style={[
                 styles.qty,
-                (isOutOfStock || isLowStock) &&
-                  styles.qtyLow,
+                (isOutOfStock || isLowStock) && styles.qtyLow,
                 { marginHorizontal: 8 },
               ]}
             >
@@ -1680,6 +1681,7 @@ export default function ProductList({ navigation }: Props) {
               <Text style={styles.qtyBtnText}>＋</Text>
             </TouchableOpacity>
 
+            {/* ⋮ Editar */}
             <TouchableOpacity
               style={styles.moreBtn}
               onPress={() => openEdit(item)}
@@ -1688,30 +1690,85 @@ export default function ProductList({ navigation }: Props) {
             >
               <Text style={styles.moreBtnText}>⋮</Text>
             </TouchableOpacity>
+
+            {/* 📈 Historial de movimientos */}
+            <TouchableOpacity
+              style={[styles.moreBtn, { marginLeft: 4 }]}
+              onPress={() =>
+                navigation.navigate('Movements', {
+                  productId: item.id,
+                  productName: item.name,
+                })
+              }
+              accessibilityLabel="Ver historial de stock"
+              hitSlop={8}
+            >
+              <Text style={styles.moreBtnText}>📈</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </View>
     );
   };
 
-const EmptyState = ({
-  hasAnyProducts,
-  hasActiveFilters,
-  onClearFilters,
-  onAddProduct,
-}: {
-  hasAnyProducts: boolean;
-  hasActiveFilters: boolean;
-  onClearFilters: () => void;
-  onAddProduct: () => void;
-}) => {
-  // Caso 1: no hay ningún producto en el inventario
-  if (!hasAnyProducts) {
+  const EmptyState = ({
+    hasAnyProducts,
+    hasActiveFilters,
+    onClearFilters,
+    onAddProduct,
+  }: {
+    hasAnyProducts: boolean;
+    hasActiveFilters: boolean;
+    onClearFilters: () => void;
+    onAddProduct: () => void;
+  }) => {
+    // Caso 1: no hay ningún producto en el inventario
+    if (!hasAnyProducts) {
+      return (
+        <View style={styles.emptyWrap}>
+          <Text style={styles.emptyTitle}>No hay productos</Text>
+          <Text style={styles.emptySubtitle}>
+            Agrega el primero para comenzar.
+          </Text>
+          <TouchableOpacity
+            style={[styles.addButton, styles.primary]}
+            onPress={onAddProduct}
+          >
+            <Text style={styles.addButtonText}>
+              Agregar producto
+            </Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    // Caso 2: sí hay productos, pero los filtros dejan la lista vacía
+    if (hasActiveFilters) {
+      return (
+        <View style={styles.emptyWrap}>
+          <Text style={styles.emptyTitle}>Sin resultados</Text>
+          <Text style={styles.emptySubtitle}>
+            No hay productos que coincidan con la búsqueda
+            o filtros actuales.
+          </Text>
+          <TouchableOpacity
+            style={[styles.addButton, styles.secondary]}
+            onPress={onClearFilters}
+          >
+            <Text style={styles.addButtonText}>
+              Limpiar filtros
+            </Text>
+          </TouchableOpacity>
+        </View>
+      );
+    }
+
+    // Fallback raro (por si acaso)
     return (
       <View style={styles.emptyWrap}>
-        <Text style={styles.emptyTitle}>No hay productos</Text>
+        <Text style={styles.emptyTitle}>No hay productos visibles</Text>
         <Text style={styles.emptySubtitle}>
-          Agrega el primero para comenzar.
+          Puedes ajustar los filtros o agregar un nuevo producto.
         </Text>
         <TouchableOpacity
           style={[styles.addButton, styles.primary]}
@@ -1723,48 +1780,7 @@ const EmptyState = ({
         </TouchableOpacity>
       </View>
     );
-  }
-
-  // Caso 2: sí hay productos, pero los filtros dejan la lista vacía
-  if (hasActiveFilters) {
-    return (
-      <View style={styles.emptyWrap}>
-        <Text style={styles.emptyTitle}>Sin resultados</Text>
-        <Text style={styles.emptySubtitle}>
-          No hay productos que coincidan con la búsqueda
-          o filtros actuales.
-        </Text>
-        <TouchableOpacity
-          style={[styles.addButton, styles.secondary]}
-          onPress={onClearFilters}
-        >
-          <Text style={styles.addButtonText}>
-            Limpiar filtros
-          </Text>
-        </TouchableOpacity>
-      </View>
-    );
-  }
-
-  // Fallback raro (por si acaso)
-  return (
-    <View style={styles.emptyWrap}>
-      <Text style={styles.emptyTitle}>No hay productos visibles</Text>
-      <Text style={styles.emptySubtitle}>
-        Puedes ajustar los filtros o agregar un nuevo producto.
-      </Text>
-      <TouchableOpacity
-        style={[styles.addButton, styles.primary]}
-        onPress={onAddProduct}
-      >
-        <Text style={styles.addButtonText}>
-          Agregar producto
-        </Text>
-      </TouchableOpacity>
-    </View>
-  );
-};
-
+  };
 
   return (
     <View style={styles.container}>
@@ -1974,83 +1990,81 @@ const EmptyState = ({
       </View>
 
       {/* Categorías (fila fija arriba, distinta a los filtros de estado) */}
-{categories.length > 0 && (
-  <View style={styles.categorySection}>
-    <Text style={styles.categoryTitle}>Categorías</Text>
+      {categories.length > 0 && (
+        <View style={styles.categorySection}>
+          <Text style={styles.categoryTitle}>Categorías</Text>
 
-    <ScrollView
-      horizontal
-      showsHorizontalScrollIndicator={false}
-      contentContainerStyle={styles.categoryChipsRow}
-    >
-      {categories.map((cat) => {
-        const active = selectedCategory === cat;
-        return (
-          <TouchableOpacity
-            key={cat}
-            style={[
-              styles.categoryChip,
-              active && styles.categoryChipActive,
-            ]}
-            onPress={() =>
-              setSelectedCategory(active ? null : cat)
-            }
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.categoryChipsRow}
           >
-            <Text
-              style={[
-                styles.categoryChipText,
-                active && styles.categoryChipTextActive,
-              ]}
-            >
-              {cat}
-            </Text>
-          </TouchableOpacity>
-        );
-      })}
-    </ScrollView>
-  </View>
-)}
+            {categories.map((cat) => {
+              const active = selectedCategory === cat;
+              return (
+                <TouchableOpacity
+                  key={cat}
+                  style={[
+                    styles.categoryChip,
+                    active && styles.categoryChipActive,
+                  ]}
+                  onPress={() =>
+                    setSelectedCategory(active ? null : cat)
+                  }
+                >
+                  <Text
+                    style={[
+                      styles.categoryChipText,
+                      active && styles.categoryChipTextActive,
+                    ]}
+                  >
+                    {cat}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+        </View>
+      )}
 
-{/* Lista principal */}
-<FlatList
-  data={data}
-  keyExtractor={(it) => String(it.id)}
-  renderItem={renderItem}
-  refreshControl={
-    <RefreshControl
-      refreshing={refreshing}
-      onRefresh={onRefresh}
-    />
-  }
-  ListEmptyComponent={
-  !loading ? (
-    <EmptyState
-      hasAnyProducts={hasAnyProducts}
-      hasActiveFilters={hasActiveFilters}
-      onClearFilters={() => {
-        setSearch('');
-        setFilter('all');
-        setSelectedCategory(null);
-      }}
-      onAddProduct={() => {
-        setExpiryOffset(soonDays);
-        setShowAdd(true);
-      }}
-    />
-  ) : null
-}
-
-  contentContainerStyle={
-    data.length === 0
-      ? {
-          flex: 1,
-          justifyContent: 'center',
-          alignItems: 'center',
+      {/* Lista principal */}
+      <FlatList
+        data={data}
+        keyExtractor={(it) => String(it.id)}
+        renderItem={renderItem}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+          />
         }
-      : undefined
-  }
-/>
-
+        ListEmptyComponent={
+          !loading ? (
+            <EmptyState
+              hasAnyProducts={hasAnyProducts}
+              hasActiveFilters={hasActiveFilters}
+              onClearFilters={() => {
+                setSearch('');
+                setFilter('all');
+                setSelectedCategory(null);
+              }}
+              onAddProduct={() => {
+                setExpiryOffset(soonDays);
+                setShowAdd(true);
+              }}
+            />
+          ) : null
+        }
+        contentContainerStyle={
+          data.length === 0
+            ? {
+                flex: 1,
+                justifyContent: 'center',
+                alignItems: 'center',
+              }
+            : undefined
+        }
+      />
 
       {/* Modal: alta NUEVO producto */}
       <Modal
@@ -3067,46 +3081,56 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
   },
+
   categorySection: {
-  marginTop: 4,
-  marginBottom: 12,
-},
+    marginTop: 4,
+    marginBottom: 12,
+  },
 
-categoryTitle: {
-  color: '#AEE9FF',
-  fontSize: 13,
-  fontWeight: '600',
-  marginBottom: 4,
-},
+  categoryTitle: {
+    color: '#AEE9FF',
+    fontSize: 13,
+    fontWeight: '600',
+    marginBottom: 4,
+  },
 
-categoryChipsRow: {
-  flexDirection: 'row',
-  alignItems: 'center',
-  paddingRight: 8,
-  gap: 8,
-},
+  categoryChipsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingRight: 8,
+    gap: 8,
+  },
 
-categoryChip: {
-  borderRadius: 999,
-  borderWidth: 1,
-  borderColor: 'rgba(170, 230, 255, 0.6)',
-  paddingHorizontal: 10,
-  paddingVertical: 4,
-  backgroundColor: 'transparent',
-},
+  categoryChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: 'rgba(170, 230, 255, 0.6)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    backgroundColor: 'transparent',
+  },
 
-categoryChipActive: {
-  backgroundColor: '#13B38B',
-  borderColor: '#13B38B',
-},
+  categoryChipActive: {
+    backgroundColor: '#13B38B',
+    borderColor: '#13B38B',
+  },
 
-categoryChipText: {
-  color: '#AEE9FF',
-  fontSize: 12,
-},
+  categoryChipText: {
+    color: '#AEE9FF',
+    fontSize: 12,
+  },
 
-categoryChipTextActive: {
-  color: '#04121B',
-  fontWeight: '700',
-},
+  categoryChipTextActive: {
+    color: '#04121B',
+    fontWeight: '700',
+  },
+
+  missingText: {
+    marginTop: 4,
+    color: '#FACC15',
+    fontSize: 11,
+    fontWeight: '600',
+    opacity: 0.9,
+  },
 });
+

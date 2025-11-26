@@ -43,6 +43,12 @@ export class MovementRepoSQLite implements MovementRepository {
     const note = input.note ?? null;
     const now = dayjs().toISOString();
 
+    // 🔹 Nuevo: flag opcional para decidir si se aplica o no el cambio de stock
+    const applyStock =
+      (input as any).applyStock === undefined
+        ? true
+        : Boolean((input as any).applyStock);
+
     // Inserta el movimiento
     run(
       `INSERT INTO movements (id, productId, type, qty, note, createdAt)
@@ -55,14 +61,15 @@ export class MovementRepoSQLite implements MovementRepository {
 
     // Si existe columna qty en products, actualiza stock
     // IN suma, OUT resta, ADJUST no cambia (ajústalo si quieres otro comportamiento)
-    if (this.hasProductsQtyColumn()) {
+    // 🔹 Solo si applyStock === true
+    if (this.hasProductsQtyColumn() && applyStock) {
       const delta = type === "IN" ? qty : type === "OUT" ? -qty : 0;
       if (delta !== 0) {
         run(
           `UPDATE products
            SET qty = MAX(0, COALESCE(qty, 0) + ?), updatedAt = ?
            WHERE id = ?`,
-           [delta, now, productId]
+          [delta, now, productId]
         );
       }
     }
