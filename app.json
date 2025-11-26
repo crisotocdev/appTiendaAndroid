@@ -2,13 +2,21 @@
   "expo": {
     "name": "TiendaOptimizada",
     "slug": "tienda-optimizada",
+    "owner": "roskcom",
+
+    "version": "1.0.0",
+    "scheme": "tiendaoptimizada",
     "icon": "./assets/icon.png",
+
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
+
     "android": {
+      "package": "com.roskcom.tiendaoptimizada",
+      "versionCode": 1,
       "splash": {
         "image": "./assets/splash.png",
         "resizeMode": "contain",
@@ -19,15 +27,25 @@
         "backgroundColor": "#ffffff"
       }
     },
+
     "ios": {
+      "bundleIdentifier": "com.roskcom.tiendaoptimizada",
       "splash": {
         "image": "./assets/splash.png",
         "resizeMode": "contain",
         "backgroundColor": "#ffffff"
       }
     },
+
     "plugins": [
-      "expo-sqlite"
-    ]
+      "expo-sqlite",
+      "expo-notifications"
+    ],
+
+    "extra": {
+      "eas": {
+        "projectId": "64e56aae-430e-4e7b-ba3b-0e105afa7c38"
+      }
+    }
   }
 }

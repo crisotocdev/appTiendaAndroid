@@ -476,6 +476,8 @@ export default function ProductList({ navigation }: Props) {
   const [search, setSearch] = useState('');
   const [filter, setFilter] = useState<FilterMode>('all');
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
+  // Orden de la lista
+  const [sortMode, setSortMode] = useState<'auto' | 'name' | 'stock'>('auto');
 
   // Fallbacks expuestos por provider
   const reload =
@@ -562,7 +564,7 @@ export default function ProductList({ navigation }: Props) {
   }, [showAdd, newExpiry, setExpiryOffset, expiryCfg.soonThresholdDays]);
 
   // 1) Base: mapeo de productos crudos → ProductVM ordenados
-  const baseItems: Array<ProductVM & { __skeleton?: boolean }> = useMemo(() => {
+    const baseItems: Array<ProductVM & { __skeleton?: boolean }> = useMemo(() => {
     const mapped =
       (rawProducts ?? [])
         .map((p: any) => {
@@ -608,7 +610,7 @@ export default function ProductList({ navigation }: Props) {
             id,
             name,
             brand: oneLine(q?.brand ?? q?.marca ?? ''),
-            category: oneLine(q?.category ?? q?.categoria ?? ''), // 👈 IMPORTANTE
+            category: oneLine(q?.category ?? q?.categoria ?? ''),
             sku: oneLine(q?.sku ?? q?.codigo ?? q?.code ?? ''),
             photoUrl:
               q?.photoUrl ??
@@ -638,33 +640,13 @@ export default function ProductList({ navigation }: Props) {
       })) as any[];
     }
 
-    // Orden por estado de vencimiento y días
-    const sorted = [...withoutDeleted].sort((a, b) => {
-      const ea = expiryOf(a.nextExpiry ?? null);
-      const eb = expiryOf(b.nextExpiry ?? null);
-
-      const rank = (e: ReturnType<typeof expiryOf>) => {
-        if (e.status === 'expired') return 0;
-        if (e.status === 'soon') return 1;
-        if (e.status === 'ok') return 2;
-        return 3;
-      };
-
-      const ra = rank(ea);
-      const rb = rank(eb);
-      if (ra !== rb) return ra - rb;
-
-      const da = ea.days ?? 9999;
-      const db = eb.days ?? 9999;
-      return da - db;
-    });
-
-    return sorted;
+    // Aquí ya NO ordenamos: el orden lo aplicamos después según sortMode
+    return withoutDeleted;
   }, [rawProducts, loading, deletedIds, expiryOf]);
 
   // 2) Filtros combinados: texto + estado + categoría
-  const data: Array<ProductVM & { __skeleton?: boolean }> = useMemo(() => {
-    // Si estamos mostrando skeletons, no filtrar (da lo mismo mientras carga)
+    const data: Array<ProductVM & { __skeleton?: boolean }> = useMemo(() => {
+    // Si estamos mostrando skeletons, no filtrar ni ordenar
     if (baseItems.some((it) => (it as any).__skeleton)) {
       return baseItems;
     }
@@ -710,8 +692,45 @@ export default function ProductList({ navigation }: Props) {
         ? byFilter.filter((p) => (p.category || '') === selectedCategory)
         : byFilter;
 
-    return byCategory;
-  }, [baseItems, search, filter, expiryOf, selectedCategory]);
+    // 🔀 ORDENAMIENTO según sortMode
+    const list = [...byCategory];
+
+    if (sortMode === 'name') {
+      list.sort((a, b) =>
+        (a.name || '').localeCompare(b.name || '', 'es', {
+          sensitivity: 'base',
+        })
+      );
+    } else if (sortMode === 'stock') {
+      list.sort(
+        (a, b) =>
+          Number(b.qty ?? 0) - Number(a.qty ?? 0)
+      );
+    } else {
+      // 'auto' → mismo criterio que teníamos antes: vencidos, por vencer, ok, sin fecha
+      list.sort((a, b) => {
+        const ea = expiryOf(a.nextExpiry ?? null);
+        const eb = expiryOf(b.nextExpiry ?? null);
+
+        const rank = (e: ReturnType<typeof expiryOf>) => {
+          if (e.status === 'expired') return 0;
+          if (e.status === 'soon') return 1;
+          if (e.status === 'ok') return 2;
+          return 3;
+        };
+
+        const ra = rank(ea);
+        const rb = rank(eb);
+        if (ra !== rb) return ra - rb;
+
+        const da = ea.days ?? 9999;
+        const db = eb.days ?? 9999;
+        return da - db;
+      });
+    }
+
+    return list;
+  }, [baseItems, search, filter, expiryOf, selectedCategory, sortMode]);
 
   // 👇 Lista de categorías únicas ordenadas (a partir de todo el inventario)
   const categories = useMemo(() => {
@@ -725,10 +744,11 @@ export default function ProductList({ navigation }: Props) {
   }, [baseItems]);
 
   // 📊 Resumen de inventario
-  const summary = useMemo(() => {
+    const summary = useMemo(() => {
     const items = (data || []).filter((it) => !it.__skeleton);
 
     const total = items.length;
+    let totalUnits = 0;
     let expSoon = 0;
     let expired = 0;
     let outOfStock = 0;
@@ -742,6 +762,8 @@ export default function ProductList({ navigation }: Props) {
           ? p.minStock
           : 0;
 
+      totalUnits += qty;
+
       if (info.status === 'soon') expSoon += 1;
       if (info.status === 'expired') expired += 1;
 
@@ -750,7 +772,7 @@ export default function ProductList({ navigation }: Props) {
       else if (stockStatus === 'low') lowStock += 1;
     });
 
-    return { total, expSoon, expired, outOfStock, lowStock };
+    return { total, totalUnits, expSoon, expired, outOfStock, lowStock };
   }, [data, expiryOf]);
 
   // ¿Hay productos en bruto (antes de filtros)?
@@ -1148,7 +1170,7 @@ export default function ProductList({ navigation }: Props) {
           await (productRepo as any).adjustStock(id, nextQty - currentQty);
         }
 
-        // 📝 Registrar movimiento en historial (no rompemos el stock si falla)
+        // 📝 Registrar movimiento en historial (sin tocar stock, ya lo actualizamos arriba)
         try {
           const type: 'IN' | 'OUT' | 'ADJUST' =
             delta > 0 ? 'IN' : delta < 0 ? 'OUT' : 'ADJUST';
@@ -1158,7 +1180,9 @@ export default function ProductList({ navigation }: Props) {
             type,
             qty: Math.abs(delta),
             note: null,
-          });
+            // 👇 muy importante: que NO vuelva a modificar el stock
+            applyStock: false,
+          } as any);
         } catch (err) {
           console.log('[ProductList] error registrando movimiento', err);
         }
@@ -1990,6 +2014,70 @@ export default function ProductList({ navigation }: Props) {
         </TouchableOpacity>
       </View>
 
+       {/* Total de unidades (sobre la lista filtrada actual) */}
+      <View style={styles.totalUnitsRow}>
+        <Text style={styles.totalUnitsText}>
+          Unidades totales visibles: {summary.totalUnits}
+        </Text>
+      </View>
+
+            {/* Ordenar */}
+      <View style={styles.sortRow}>
+        <Text style={styles.sortLabel}>Ordenar:</Text>
+        <View style={styles.sortChipsRow}>
+          <TouchableOpacity
+            style={[
+              styles.filterChip,
+              sortMode === 'auto' && styles.filterChipActive,
+            ]}
+            onPress={() => setSortMode('auto')}
+          >
+            <Text
+              style={[
+                styles.filterChipText,
+                sortMode === 'auto' && styles.filterChipTextActive,
+              ]}
+            >
+              Automático
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.filterChip,
+              sortMode === 'name' && styles.filterChipActive,
+            ]}
+            onPress={() => setSortMode('name')}
+          >
+            <Text
+              style={[
+                styles.filterChipText,
+                sortMode === 'name' && styles.filterChipTextActive,
+              ]}
+            >
+              Nombre
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[
+              styles.filterChip,
+              sortMode === 'stock' && styles.filterChipActive,
+            ]}
+            onPress={() => setSortMode('stock')}
+          >
+            <Text
+              style={[
+                styles.filterChipText,
+                sortMode === 'stock' && styles.filterChipTextActive,
+              ]}
+            >
+              Stock
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+
       {/* Categorías (fila fija arriba, distinta a los filtros de estado) */}
       {categories.length > 0 && (
         <View style={styles.categorySection}>
@@ -2670,6 +2758,8 @@ export default function ProductList({ navigation }: Props) {
         <Text style={styles.fabIcon}>＋</Text>
       </TouchableOpacity>
     </View>
+
+    
   );
 }
 
@@ -3156,6 +3246,31 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: '800',
   },
-
+    sortRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginHorizontal: 16,
+    marginBottom: 4,
+    marginTop: 4,
+  },
+  sortLabel: {
+    color: '#e5e7eb',
+    fontSize: 13,
+    marginRight: 8,
+  },
+  sortChipsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 4,
+    flex: 1,
+  },
+  totalUnitsRow: {
+    paddingHorizontal: 16,
+    paddingBottom: 4,
+  },
+  totalUnitsText: {
+    color: '#e5e7eb',
+    fontSize: 13,
+  },
 });
 
