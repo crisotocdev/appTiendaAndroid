@@ -1570,7 +1570,7 @@ export default function ProductList({ navigation }: Props) {
     [onDelete]
   );
 
-    const renderItem = ({
+      const renderItem = ({
     item,
   }: {
     item: ProductVM & { __skeleton?: boolean };
@@ -1591,8 +1591,9 @@ export default function ProductList({ navigation }: Props) {
 
     return (
       <View style={styles.card}>
+        {/* FILA PRINCIPAL: foto + info + qty */}
         <View style={styles.row}>
-          {/* 👇 SOLO la zona izquierda abre el editor */}
+          {/* Izquierda: abre editor */}
           <TouchableOpacity
             onPress={() => openEdit(item)}
             activeOpacity={0.8}
@@ -1611,13 +1612,13 @@ export default function ProductList({ navigation }: Props) {
             <View style={{ width: 12 }} />
 
             <View style={styles.mainCol}>
-              <Text style={styles.name}>{item.name}</Text>
-              <Text style={styles.meta}>
-                {[item.brand, item.category, item.sku].filter(Boolean).join(' · ') ||
-                  '—'}
+              <Text style={styles.name} numberOfLines={1}>
+                {item.name}
+              </Text>
+              <Text style={styles.meta} numberOfLines={1}>
+                {[item.brand, item.category, item.sku].filter(Boolean).join(' · ') || '—'}
               </Text>
 
-              {/* Pills de vencimiento + stock */}
               <View style={styles.pillRow}>
                 <View
                   style={[
@@ -1653,7 +1654,7 @@ export default function ProductList({ navigation }: Props) {
             </View>
           </TouchableOpacity>
 
-          {/* 👇 Controles de cantidad y menú */}
+          {/* Controles de cantidad */}
           <View style={styles.qtyControls}>
             <TouchableOpacity
               style={styles.qtyBtn}
@@ -1680,36 +1681,36 @@ export default function ProductList({ navigation }: Props) {
             >
               <Text style={styles.qtyBtnText}>＋</Text>
             </TouchableOpacity>
-
-            {/* ⋮ Editar */}
-            <TouchableOpacity
-              style={styles.moreBtn}
-              onPress={() => openEdit(item)}
-              accessibilityLabel="Editar producto"
-              hitSlop={8}
-            >
-              <Text style={styles.moreBtnText}>⋮</Text>
-            </TouchableOpacity>
-
-            {/* 📈 Historial de movimientos */}
-            <TouchableOpacity
-              style={[styles.moreBtn, { marginLeft: 4 }]}
-              onPress={() =>
-                navigation.navigate('Movements', {
-                  productId: item.id,
-                  productName: item.name,
-                })
-              }
-              accessibilityLabel="Ver historial de stock"
-              hitSlop={8}
-            >
-              <Text style={styles.moreBtnText}>📈</Text>
-            </TouchableOpacity>
           </View>
+        </View>
+
+        {/* FILA DE ACCIONES: abajo, no comprime el contenido */}
+        <View style={styles.actionsRow}>
+          <TouchableOpacity
+            style={[styles.actionIconBtn, styles.actionPrimary]}
+            onPress={() =>
+              navigation.navigate('Movements', {
+                productId: item.id,
+                productName: item.name,
+              })
+            }
+            accessibilityLabel="Ver movimientos de stock"
+          >
+            <Text style={styles.actionIconText}>📈</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={styles.actionIconBtn}
+            onPress={() => openEdit(item)}
+            accessibilityLabel="Editar producto"
+          >
+            <Text style={styles.actionIconText}>⋮</Text>
+          </TouchableOpacity>
         </View>
       </View>
     );
   };
+
 
   const EmptyState = ({
     hasAnyProducts,
@@ -3132,5 +3133,29 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     opacity: 0.9,
   },
+    actionsRow: {
+    marginTop: 10,
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    columnGap: 8,
+  },
+  actionIconBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: 'rgba(170,230,255,0.30)',
+    backgroundColor: 'rgba(255,255,255,0.05)',
+  },
+  actionPrimary: {
+    borderColor: 'rgba(5,168,109,0.8)',
+    backgroundColor: 'rgba(5,168,109,0.25)',
+  },
+  actionIconText: {
+    color: '#EFFFFB',
+    fontSize: 14,
+    fontWeight: '800',
+  },
+
 });
 
